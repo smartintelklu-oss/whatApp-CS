@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp CS Smart Automator",
+  "description": "Aplikasi otomatisasi WhatsApp Customer Service dengan balasan pintar berbasis AI, pemindaian QR code, manajemen pesan real-time, dan pengiriman pesan terjadwal gambar atau dokumen.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
