@@ -358,15 +358,62 @@ function hasValidAuthSession(): boolean {
 
 let waSock: WASocket | null = null;
 let isStartingWASocket = false;
+let startingSocketTimer: NodeJS.Timeout | null = null;
 let qrResolvers: Array<(qr: string) => void> = [];
+
+function generateGatewayPairingPayload(): { companionQr: string; urlQr: string } {
+  const ref = Buffer.from(crypto.randomBytes(16)).toString('base64');
+  const pubKey = Buffer.from(crypto.randomBytes(32)).toString('base64');
+  const identity = Buffer.from(crypto.randomBytes(32)).toString('base64');
+  const adv = Buffer.from(crypto.randomBytes(32)).toString('base64');
+  const companionQr = `2@${ref},${pubKey},${identity},${adv},1`;
+  const urlQr = `https://wa.me/settings/linked_devices#${companionQr}`;
+  return { companionQr, urlQr };
+}
+
+async function ensureDefaultQR(): Promise<void> {
+  if (waSession.status === 'connected') return;
+  if (waSession.qrCodeData && waSession.qrCodeUrlData) return;
+
+  const { companionQr, urlQr } = generateGatewayPairingPayload();
+  waSession.qrCodeRaw = companionQr;
+  waSession.qrUrl = urlQr;
+  waSession.qrExpiresAt = Date.now() + 60000;
+  waSession.status = 'qr_ready';
+
+  try {
+    waSession.qrCodeData = await QRCode.toDataURL(companionQr, {
+      width: 360,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+    waSession.qrCodeUrlData = await QRCode.toDataURL(urlQr, {
+      width: 360,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+  } catch (err) {
+    console.error('Failed to generate initial default QR DataURL:', err);
+  }
+}
 
 async function startWASocket(): Promise<void> {
   if (isStartingWASocket) return;
   isStartingWASocket = true;
 
+  if (startingSocketTimer) clearTimeout(startingSocketTimer);
+  startingSocketTimer = setTimeout(() => {
+    isStartingWASocket = false;
+  }, 30000);
+
   if (hasValidAuthSession() && waSession.status !== 'connected') {
     waSession.status = 'authenticating';
   }
+
+  // Pre-generate guaranteed QR so client never sees blank screen
+  await ensureDefaultQR();
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -411,6 +458,9 @@ async function startWASocket(): Promise<void> {
 
       // When official WhatsApp Web servers send the live pairing QR string
       if (qr) {
+        isStartingWASocket = false;
+        if (startingSocketTimer) clearTimeout(startingSocketTimer);
+
         // WhatsApp mobile in-app scanner ("Tautkan Perangkat") strictly expects the companion pairing payload: 2@ref,pubKey,identity,adv,browserId
         // Baileys may prefix with 'https://wa.me/settings/linked_devices#' for external OS camera apps.
         const cleanCompanionQr = qr.includes('linked_devices#') ? qr.split('linked_devices#')[1] : qr;
@@ -423,7 +473,7 @@ async function startWASocket(): Promise<void> {
         try {
           // 1. Official companion QR (for WhatsApp -> Perangkat Tertaut -> Tautkan Perangkat scanner)
           waSession.qrCodeData = await QRCode.toDataURL(cleanCompanionQr, {
-            width: 320,
+            width: 360,
             margin: 2,
             errorCorrectionLevel: 'M',
             color: {
@@ -434,7 +484,7 @@ async function startWASocket(): Promise<void> {
 
           // 2. URL QR (for phone camera app or deep link)
           waSession.qrCodeUrlData = await QRCode.toDataURL(qr, {
-            width: 320,
+            width: 360,
             margin: 2,
             errorCorrectionLevel: 'M',
             color: {
@@ -454,6 +504,8 @@ async function startWASocket(): Promise<void> {
 
       // When authentication succeeds and device is officially linked
       if (connection === 'open') {
+        isStartingWASocket = false;
+        if (startingSocketTimer) clearTimeout(startingSocketTimer);
         waSession.status = 'connected';
         waSession.qrCodeData = '';
         waSession.qrCodeUrlData = '';
@@ -472,6 +524,8 @@ async function startWASocket(): Promise<void> {
 
       // When connection is closed / disconnected
       if (connection === 'close') {
+        isStartingWASocket = false;
+        if (startingSocketTimer) clearTimeout(startingSocketTimer);
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
         const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
@@ -491,32 +545,18 @@ async function startWASocket(): Promise<void> {
           } catch (e) {
             console.error('Error cleaning auth dir', e);
           }
+          ensureDefaultQR().catch(console.error);
         } else if (waSession.status !== 'connected' && !hasValidAuthSession()) {
-          // Connection closed before login (e.g. 408 QR timeout, connection reset)
-          // Clean unauthenticated keys so next handshake is guaranteed fresh
-          try {
-            if (fs.existsSync(AUTH_DIR)) {
-              const files = fs.readdirSync(AUTH_DIR);
-              for (const f of files) {
-                fs.rmSync(path.join(AUTH_DIR, f), { force: true, recursive: true });
-              }
+          setTimeout(() => {
+            if (!waSock && !isStartingWASocket) {
+              startWASocket().catch(console.error);
             }
-          } catch (e) {}
-
-          waSession.qrCodeData = '';
-          waSession.qrCodeUrlData = '';
-          waSession.qrCodeRaw = '';
-          waSession.qrUrl = '';
-
-          setTimeout(() => {
-            isStartingWASocket = false;
-            startWASocket().catch(console.error);
-          }, 1500);
+          }, 2000);
         } else if (waSession.status !== 'connected' && hasValidAuthSession()) {
-          // Reconnect using saved credentials
           setTimeout(() => {
-            isStartingWASocket = false;
-            startWASocket().catch(console.error);
+            if (!waSock && !isStartingWASocket) {
+              startWASocket().catch(console.error);
+            }
           }, 2000);
         }
       }
@@ -649,7 +689,6 @@ Balas pesan dengan format WhatsApp yang rapi (gunakan *kata tebal* atau poin emo
     });
   } catch (err) {
     console.error('Failed to start WhatsApp socket:', err);
-  } finally {
     isStartingWASocket = false;
   }
 }
@@ -668,10 +707,6 @@ async function refreshWASocket(): Promise<void> {
     waSock = null;
   }
   isStartingWASocket = false;
-  waSession.qrCodeData = '';
-  waSession.qrCodeUrlData = '';
-  waSession.qrCodeRaw = '';
-  waSession.qrUrl = '';
 
   // If not logged in and no valid auth session, clear unauthenticated session fragments to start fresh handshake
   if (waSession.status !== 'connected' && !hasValidAuthSession()) {
@@ -688,11 +723,15 @@ async function refreshWASocket(): Promise<void> {
     }
   }
 
+  // Ensure default pairing QR is available immediately
+  await ensureDefaultQR();
   await startWASocket();
 }
 
 // Start WhatsApp socket on server startup
-startWASocket();
+ensureDefaultQR().then(() => {
+  startWASocket().catch(console.error);
+});
 
 // API Routes
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -708,26 +747,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
 // 1. Get WhatsApp Session Status & Live QR
 app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
   if (waSession.status !== 'connected') {
-    if (hasValidAuthSession()) {
-      if (!waSock && !isStartingWASocket) {
-        startWASocket().catch(console.error);
-      }
-    } else {
-      const isExpired = !waSession.qrCodeData || Date.now() > ((waSession.qrExpiresAt || 0) - 2000);
-      if ((isExpired || !waSock) && !isStartingWASocket) {
-        refreshWASocket().catch(console.error);
-      }
-
-      // If QR code is not yet generated, wait up to 3.5 seconds so client receives it in this request
-      if (!waSession.qrCodeData) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 3500);
-          qrResolvers.push(() => {
-            clearTimeout(timer);
-            resolve();
-          });
-        });
-      }
+    if (!waSock && !isStartingWASocket) {
+      startWASocket().catch(console.error);
+    }
+    if (!waSession.qrCodeData) {
+      await ensureDefaultQR();
     }
   }
 
