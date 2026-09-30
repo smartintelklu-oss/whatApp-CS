@@ -42,7 +42,7 @@ if (apiKey) {
 
 // In-memory session state for WhatsApp Gateway
 interface WASession {
-  status: 'disconnected' | 'qr_ready' | 'authenticating' | 'connected';
+  status: 'disconnected' | 'connecting' | 'qr_ready' | 'authenticating' | 'connected';
   qrCodeData: string;
   qrCodeUrlData?: string;
   qrCodeRaw?: string;
@@ -295,8 +295,11 @@ const DEFAULT_MESSAGES: Record<string, any[]> = {
 function getStoredContacts(): any[] {
   try {
     if (fs.existsSync(CONTACTS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CONTACTS_FILE, 'utf-8'));
-      if (Array.isArray(data) && data.length > 0) return data;
+      const content = fs.readFileSync(CONTACTS_FILE, 'utf-8').trim();
+      if (content) {
+        const data = JSON.parse(content);
+        if (Array.isArray(data)) return data;
+      }
     }
   } catch (e) {
     console.error('Error reading contacts file:', e);
@@ -716,7 +719,7 @@ app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
       }
 
       // If QR code is not yet generated, wait up to 3.5 seconds so client receives it in this request
-      if (!waSession.qrCodeData && waSession.status !== 'connected') {
+      if (!waSession.qrCodeData) {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, 3500);
           qrResolvers.push(() => {
@@ -861,11 +864,11 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
 
     waSession = {
       ...waSession,
-      status: 'qr_ready',
+      status: 'connecting',
       phoneNumber: undefined,
       pushName: undefined,
     };
-    await generateGatewayQR();
+    refreshWASocket().catch(console.error);
 
     // Restart socket to prepare fresh QR
     setTimeout(() => {
@@ -1009,10 +1012,87 @@ app.get('/api/messages/:contactId', (req: Request, res: Response) => {
   res.json({ messages: messagesMap[contactId] || [] });
 });
 
+// Add / Save message directly to central store (shared across devices)
+app.post('/api/messages', (req: Request, res: Response) => {
+  try {
+    const {
+      contactId,
+      text,
+      sender = 'customer',
+      senderName,
+      status = 'read',
+      mediaType = 'none',
+      mediaUrl,
+      mediaName,
+      mediaSize,
+      isAiGenerated,
+      aiIntent,
+      aiConfidence,
+      aiReasoning,
+    } = req.body;
+
+    if (!contactId || (!text && !mediaUrl)) {
+      return res.status(400).json({ error: 'contactId dan pesan teks/media wajib diisi' });
+    }
+
+    const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const newMsg = {
+      id: 'msg_' + Date.now(),
+      contactId,
+      sender,
+      senderName: senderName || (sender === 'customer' ? 'Pelanggan' : sender === 'bot' ? 'Asisten CS AI' : 'CS Admin'),
+      text: text || '',
+      timestamp: timeStr,
+      status: sender === 'customer' ? 'read' : status || 'delivered',
+      mediaType,
+      mediaUrl,
+      mediaName,
+      mediaSize,
+      isAiGenerated,
+      aiIntent,
+      aiConfidence,
+      aiReasoning,
+    };
+
+    const messagesMap = getStoredMessages();
+    const currentMsgs = messagesMap[contactId] || [];
+    messagesMap[contactId] = [...currentMsgs, newMsg];
+    saveStoredMessages(messagesMap);
+
+    const contactsList = getStoredContacts();
+    const contactIndex = contactsList.findIndex((c) => c.id === contactId);
+    if (contactIndex >= 0) {
+      contactsList[contactIndex].lastMessageTime = timeStr;
+      if (sender === 'customer') {
+        contactsList[contactIndex].unreadCount = (contactsList[contactIndex].unreadCount || 0) + 1;
+      }
+      saveStoredContacts(contactsList);
+    }
+
+    res.json({ success: true, message: newMsg });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Gagal menyimpan pesan' });
+  }
+});
+
 // 8. Send WhatsApp Message (Real Gateway via WhatsApp Web Multi-Device)
 app.post('/api/whatsapp/send-message', async (req: Request, res: Response) => {
   try {
-    const { contactId, recipientPhone, text, mediaType, mediaUrl, mediaName, mediaSize } = req.body;
+    const {
+      contactId,
+      recipientPhone,
+      text,
+      sender = 'agent',
+      senderName,
+      mediaType,
+      mediaUrl,
+      mediaName,
+      mediaSize,
+      isAiGenerated,
+      aiIntent,
+      aiConfidence,
+      aiReasoning,
+    } = req.body;
 
     if (!recipientPhone && !contactId) {
       return res.status(400).json({ error: 'recipientPhone atau contactId wajib diisi' });
@@ -1034,6 +1114,28 @@ app.post('/api/whatsapp/send-message', async (req: Request, res: Response) => {
     // Normalize phone number (handle 08xx -> 628xx, +62, etc.)
     const { clean, jid: defaultJid, display } = normalizePhoneNumber(targetPhone);
     let targetJid = defaultJid;
+
+    // If contact not found, auto-create contact in persistent store
+    if (!contact) {
+      targetContactId = targetContactId || 'cust_' + Date.now();
+      contact = {
+        id: targetContactId,
+        name: display,
+        phone: display,
+        avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
+        unreadCount: 0,
+        tag: 'Pelanggan Baru',
+        lastMessageTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        notes: 'Kontak otomatis dibuat saat mengirim pesan.',
+        totalOrders: 0,
+        lifetimeValue: 'Rp 0',
+        isAiAutoReplyEnabled: true,
+      };
+      contactsList.unshift(contact);
+      saveStoredContacts(contactsList);
+    } else {
+      targetContactId = contact.id;
+    }
 
     let sentReal = false;
     let deliveryError: string | null = null;
@@ -1091,16 +1193,16 @@ app.post('/api/whatsapp/send-message', async (req: Request, res: Response) => {
         deliveryError = err?.message || 'Gagal mengirim ke server WhatsApp';
       }
     } else {
-      deliveryError = 'WhatsApp Gateway belum terhubung. Silakan tautkan WhatsApp terlebih dahulu.';
+      deliveryError = 'WhatsApp Gateway belum terhubung. Silakan pindai Kode QR WhatsApp untuk menautkan perangkat.';
     }
 
     // Save message to centralized persistent store
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     const newMsg = {
       id: 'msg_' + Date.now(),
-      contactId: targetContactId || (contact ? contact.id : 'c_' + clean),
-      sender: 'agent',
-      senderName: 'CS Admin',
+      contactId: targetContactId,
+      sender,
+      senderName: senderName || (sender === 'bot' ? 'Asisten CS AI' : 'CS Admin'),
       text: text || '',
       timestamp: timeStr,
       status: sentReal ? 'delivered' : 'sent',
@@ -1108,17 +1210,19 @@ app.post('/api/whatsapp/send-message', async (req: Request, res: Response) => {
       mediaUrl,
       mediaName,
       mediaSize,
+      isAiGenerated,
+      aiIntent,
+      aiConfidence,
+      aiReasoning,
     };
 
-    if (contact) {
-      contact.lastMessageTime = timeStr;
-      saveStoredContacts(contactsList);
+    contact.lastMessageTime = timeStr;
+    saveStoredContacts(contactsList);
 
-      const messagesMap = getStoredMessages();
-      const currentMsgs = messagesMap[contact.id] || [];
-      messagesMap[contact.id] = [...currentMsgs, newMsg];
-      saveStoredMessages(messagesMap);
-    }
+    const messagesMap = getStoredMessages();
+    const currentMsgs = messagesMap[targetContactId] || [];
+    messagesMap[targetContactId] = [...currentMsgs, newMsg];
+    saveStoredMessages(messagesMap);
 
     res.json({
       success: true,

@@ -55,5 +55,17 @@
       "aiConfidence": 0.95,
       "aiReasoning": "Mendeteksi pertanyaan status pengiriman untuk invoice #INV-9821."
     }
+  ],
+  "cust_1790747874984": [
+    {
+      "id": "msg_1790749610883",
+      "contactId": "cust_1790747874984",
+      "sender": "agent",
+      "senderName": "CS Admin",
+      "text": "Halo tes pesan",
+      "timestamp": "06.26",
+      "status": "sent",
+      "mediaType": "none"
+    }
   ]
 }

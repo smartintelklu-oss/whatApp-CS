@@ -635,11 +635,17 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
                       {isMe && (
                         <span>
                           {msg.status === 'read' ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-blue-500 inline" title="Dibaca di WhatsApp Pelanggan" />
+                            <span title="Dibaca di WhatsApp Pelanggan">
+                              <CheckCheck className="w-3.5 h-3.5 text-blue-500 inline" />
+                            </span>
                           ) : msg.status === 'delivered' ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-slate-400 inline" title="Tersampaikan ke WhatsApp Pelanggan" />
+                            <span title="Tersampaikan ke WhatsApp Pelanggan">
+                              <CheckCheck className="w-3.5 h-3.5 text-slate-400 inline" />
+                            </span>
                           ) : (
-                            <Check className="w-3.5 h-3.5 text-slate-400 inline" title="Terkirim dari Sistem" />
+                            <span title="Terkirim dari Sistem">
+                              <Check className="w-3.5 h-3.5 text-slate-400 inline" />
+                            </span>
                           )}
                         </span>
                       )}

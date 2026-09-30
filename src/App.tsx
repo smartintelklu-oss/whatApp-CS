@@ -30,25 +30,47 @@ export default function App() {
   // Sync contacts, messages, and WhatsApp status with central server (Shared across all devices)
   const syncServerData = () => {
     fetch('/api/contacts')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) return null;
+        return res.json();
+      })
       .then((data) => {
-        if (Array.isArray(data?.contacts) && data.contacts.length > 0) {
+        if (data && Array.isArray(data.contacts)) {
           setContacts(data.contacts);
+          // Ensure active contact exists in contacts list
+          if (data.contacts.length > 0) {
+            setActiveContactId((current) => {
+              const exists = data.contacts.some((c: any) => c.id === current);
+              return exists ? current : data.contacts[0].id;
+            });
+          }
         }
       })
       .catch((err) => console.error('Failed to sync contacts:', err));
 
     fetch('/api/messages')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) return null;
+        return res.json();
+      })
       .then((data) => {
-        if (data?.messages && typeof data.messages === 'object') {
+        if (data && data.messages && typeof data.messages === 'object') {
           setMessages(data.messages);
         }
       })
       .catch((err) => console.error('Failed to sync messages:', err));
 
     fetch('/api/whatsapp/status')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) return null;
+        return res.json();
+      })
       .then((data) => {
         if (data?.session) {
           setWaStatus(data.session.status);
@@ -240,15 +262,21 @@ export default function App() {
         contactId,
         recipientPhone: targetContact?.phone,
         text,
+        sender,
+        senderName: sender === 'bot' ? 'Asisten CS AI' : 'CS Admin',
         mediaType: options?.mediaType || 'none',
         mediaUrl: options?.mediaUrl,
         mediaName: options?.mediaName,
         mediaSize: options?.mediaSize,
+        isAiGenerated: options?.isAiGenerated,
+        aiIntent: options?.aiIntent,
+        aiConfidence: options?.aiConfidence,
+        aiReasoning: options?.aiReasoning,
       }),
     })
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.message) {
+        if (data?.success && data.message) {
           // Replace temp message with server confirmed message
           setMessages((prev) => ({
             ...prev,
@@ -272,25 +300,44 @@ export default function App() {
   ) => {
     let targetContactId = contactId;
 
-    // If new customer
+    // If new customer, persist to server
     if (contactId === 'new_custom' && customContact) {
-      const newId = 'cust_' + Date.now();
-      const newContact: WhatsAppContact = {
-        id: newId,
-        name: customContact.name,
-        phone: customContact.phone,
-        avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
-        unreadCount: 1,
-        tag: 'Prospek',
-        lastMessageTime: 'Baru saja',
-        notes: 'Pelanggan baru dari simulasi pesan WhatsApp.',
-        totalOrders: 0,
-        lifetimeValue: 'Rp 0',
-        isAiAutoReplyEnabled: true,
-      };
-
-      setContacts((prev) => [newContact, ...prev]);
-      targetContactId = newId;
+      try {
+        const res = await fetch('/api/contacts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: customContact.name,
+            phone: customContact.phone,
+            tag: 'Prospek',
+            notes: 'Pelanggan baru dari simulasi pesan WhatsApp.',
+            isAiAutoReplyEnabled: true,
+          }),
+        });
+        const data = await res.json();
+        if (data?.contact) {
+          targetContactId = data.contact.id;
+          setContacts((prev) => [data.contact, ...prev.filter((c) => c.id !== data.contact.id)]);
+        }
+      } catch (err) {
+        console.error('Failed to persist simulated contact:', err);
+        const newId = 'cust_' + Date.now();
+        const newContact: WhatsAppContact = {
+          id: newId,
+          name: customContact.name,
+          phone: customContact.phone,
+          avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
+          unreadCount: 1,
+          tag: 'Prospek',
+          lastMessageTime: 'Baru saja',
+          notes: 'Pelanggan baru dari simulasi pesan WhatsApp.',
+          totalOrders: 0,
+          lifetimeValue: 'Rp 0',
+          isAiAutoReplyEnabled: true,
+        };
+        setContacts((prev) => [newContact, ...prev]);
+        targetContactId = newId;
+      }
     }
 
     setActiveContactId(targetContactId);
@@ -312,6 +359,7 @@ export default function App() {
       status: 'read',
     };
 
+    // Save message locally and to server
     setMessages((prev) => ({
       ...prev,
       [targetContactId]: [...(prev[targetContactId] || []), incomingMsg],
@@ -327,6 +375,12 @@ export default function App() {
           : c
       )
     );
+
+    fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(incomingMsg),
+    }).catch(console.error);
 
     // Smart Auto-Reply Trigger
     if (botSettings.isAutoReplyActive && customerObj.isAiAutoReplyEnabled && waStatus === 'connected') {
