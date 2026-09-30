@@ -45,6 +45,7 @@ interface WASession {
   status: 'disconnected' | 'connecting' | 'qr_ready' | 'authenticating' | 'connected';
   qrCodeData: string;
   qrCodeUrlData?: string;
+  qrCodeRawData?: string;
   qrCodeRaw?: string;
   qrUrl?: string;
   qrExpiresAt: number;
@@ -61,6 +62,7 @@ let waSession: WASession = {
   status: 'connecting',
   qrCodeData: '',
   qrCodeUrlData: '',
+  qrCodeRawData: '',
   qrCodeRaw: '',
   qrUrl: '',
   qrExpiresAt: Date.now() + 45000,
@@ -361,44 +363,6 @@ let isStartingWASocket = false;
 let startingSocketTimer: NodeJS.Timeout | null = null;
 let qrResolvers: Array<(qr: string) => void> = [];
 
-function generateGatewayPairingPayload(): { companionQr: string; urlQr: string } {
-  const ref = Buffer.from(crypto.randomBytes(16)).toString('base64');
-  const pubKey = Buffer.from(crypto.randomBytes(32)).toString('base64');
-  const identity = Buffer.from(crypto.randomBytes(32)).toString('base64');
-  const adv = Buffer.from(crypto.randomBytes(32)).toString('base64');
-  const companionQr = `2@${ref},${pubKey},${identity},${adv},1`;
-  const urlQr = `https://wa.me/settings/linked_devices#${companionQr}`;
-  return { companionQr, urlQr };
-}
-
-async function ensureDefaultQR(): Promise<void> {
-  if (waSession.status === 'connected') return;
-  if (waSession.qrCodeData && waSession.qrCodeUrlData) return;
-
-  const { companionQr, urlQr } = generateGatewayPairingPayload();
-  waSession.qrCodeRaw = companionQr;
-  waSession.qrUrl = urlQr;
-  waSession.qrExpiresAt = Date.now() + 60000;
-  waSession.status = 'qr_ready';
-
-  try {
-    waSession.qrCodeData = await QRCode.toDataURL(companionQr, {
-      width: 360,
-      margin: 2,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#000000', light: '#ffffff' },
-    });
-    waSession.qrCodeUrlData = await QRCode.toDataURL(urlQr, {
-      width: 360,
-      margin: 2,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#000000', light: '#ffffff' },
-    });
-  } catch (err) {
-    console.error('Failed to generate initial default QR DataURL:', err);
-  }
-}
-
 async function startWASocket(): Promise<void> {
   if (isStartingWASocket) return;
   isStartingWASocket = true;
@@ -411,9 +375,6 @@ async function startWASocket(): Promise<void> {
   if (hasValidAuthSession() && waSession.status !== 'connected') {
     waSession.status = 'authenticating';
   }
-
-  // Pre-generate guaranteed QR so client never sees blank screen
-  await ensureDefaultQR();
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -461,18 +422,20 @@ async function startWASocket(): Promise<void> {
         isStartingWASocket = false;
         if (startingSocketTimer) clearTimeout(startingSocketTimer);
 
-        // WhatsApp mobile in-app scanner ("Tautkan Perangkat") strictly expects the companion pairing payload: 2@ref,pubKey,identity,adv,browserId
-        // Baileys may prefix with 'https://wa.me/settings/linked_devices#' for external OS camera apps.
-        const cleanCompanionQr = qr.includes('linked_devices#') ? qr.split('linked_devices#')[1] : qr;
+        // Official WhatsApp Web QR payload:
+        // Full official QR string (e.g. 'https://wa.me/settings/linked_devices#2@ref,pubKey,identity,adv,browserId')
+        // And pure companion payload without URL prefix ('2@ref,pubKey,identity,adv,browserId')
+        const companionOnly = qr.includes('linked_devices#') ? qr.split('linked_devices#')[1] : qr;
+        const fullUrlQr = qr.startsWith('http') ? qr : `https://wa.me/settings/linked_devices#${qr}`;
 
         waSession.status = 'qr_ready';
-        waSession.qrCodeRaw = cleanCompanionQr;
-        waSession.qrUrl = qr;
+        waSession.qrCodeRaw = qr;
+        waSession.qrUrl = fullUrlQr;
         waSession.qrExpiresAt = Date.now() + 45000;
 
         try {
-          // 1. Official companion QR (for WhatsApp -> Perangkat Tertaut -> Tautkan Perangkat scanner)
-          waSession.qrCodeData = await QRCode.toDataURL(cleanCompanionQr, {
+          // 1. Primary official QR code - full official URL format expected by modern WhatsApp scanner & camera
+          waSession.qrCodeData = await QRCode.toDataURL(fullUrlQr, {
             width: 360,
             margin: 2,
             errorCorrectionLevel: 'M',
@@ -482,8 +445,8 @@ async function startWASocket(): Promise<void> {
             },
           });
 
-          // 2. URL QR (for phone camera app or deep link)
-          waSession.qrCodeUrlData = await QRCode.toDataURL(qr, {
+          // 2. Companion QR - raw 2@ref payload for legacy in-app scanners
+          waSession.qrCodeUrlData = await QRCode.toDataURL(companionOnly, {
             width: 360,
             margin: 2,
             errorCorrectionLevel: 'M',
@@ -493,13 +456,13 @@ async function startWASocket(): Promise<void> {
             },
           });
         } catch (err) {
-          console.error('Failed to generate QR DataURL:', err);
+          console.error('Failed to generate live QR DataURL:', err);
         }
 
         // Fulfill any awaiting HTTP callers
         const waiting = qrResolvers;
         qrResolvers = [];
-        waiting.forEach((resolve) => resolve(cleanCompanionQr));
+        waiting.forEach((resolve) => resolve(qr));
       }
 
       // When authentication succeeds and device is officially linked
@@ -545,7 +508,11 @@ async function startWASocket(): Promise<void> {
           } catch (e) {
             console.error('Error cleaning auth dir', e);
           }
-          ensureDefaultQR().catch(console.error);
+          setTimeout(() => {
+            if (!waSock && !isStartingWASocket) {
+              startWASocket().catch(console.error);
+            }
+          }, 1500);
         } else if (waSession.status !== 'connected' && !hasValidAuthSession()) {
           setTimeout(() => {
             if (!waSock && !isStartingWASocket) {
@@ -723,15 +690,11 @@ async function refreshWASocket(): Promise<void> {
     }
   }
 
-  // Ensure default pairing QR is available immediately
-  await ensureDefaultQR();
   await startWASocket();
 }
 
 // Start WhatsApp socket on server startup
-ensureDefaultQR().then(() => {
-  startWASocket().catch(console.error);
-});
+startWASocket().catch(console.error);
 
 // API Routes
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -750,8 +713,15 @@ app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
     if (!waSock && !isStartingWASocket) {
       startWASocket().catch(console.error);
     }
+    // Wait up to 3.5 seconds on cold-start so client receives the authentic QR in this request
     if (!waSession.qrCodeData) {
-      await ensureDefaultQR();
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3500);
+        qrResolvers.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     }
   }
 
@@ -802,7 +772,10 @@ app.post('/api/whatsapp/request-pairing-code', async (req: Request, res: Respons
     }
 
     // Clean phone number: remove +, spaces, dashes
-    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+    let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+    if (cleanNumber.startsWith('0')) {
+      cleanNumber = '62' + cleanNumber.slice(1);
+    }
 
     if (!waSock) {
       await startWASocket();
@@ -812,7 +785,8 @@ app.post('/api/whatsapp/request-pairing-code', async (req: Request, res: Respons
 
     if (waSock) {
       try {
-        const code = await waSock.requestPairingCode(cleanNumber);
+        const rawCode = await waSock.requestPairingCode(cleanNumber);
+        const code = rawCode.length === 8 ? `${rawCode.slice(0, 4)}-${rawCode.slice(4)}` : rawCode;
         return res.json({
           success: true,
           pairingCode: code,
@@ -874,14 +848,23 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
   try {
     if (waSock) {
       try {
-        await waSock.logout();
+        waSock.ev.removeAllListeners('connection.update');
+        waSock.ev.removeAllListeners('creds.update');
+        waSock.ev.removeAllListeners('messages.upsert');
+        (waSock.ws as any)?.close?.();
       } catch (e) {
         // ignore
       }
+      waSock = null;
     }
+
     try {
-      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      fs.mkdirSync(AUTH_DIR, { recursive: true });
+      if (fs.existsSync(AUTH_DIR)) {
+        const files = fs.readdirSync(AUTH_DIR);
+        for (const f of files) {
+          fs.rmSync(path.join(AUTH_DIR, f), { force: true, recursive: true });
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -891,13 +874,18 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
       status: 'connecting',
       phoneNumber: undefined,
       pushName: undefined,
+      qrCodeData: '',
+      qrCodeUrlData: '',
+      qrCodeRawData: '',
+      qrCodeRaw: '',
+      qrUrl: '',
     };
-    refreshWASocket().catch(console.error);
+    isStartingWASocket = false;
 
-    // Restart socket to prepare fresh QR
+    // Start fresh socket to generate new official QR
     setTimeout(() => {
       startWASocket().catch(console.error);
-    }, 1500);
+    }, 500);
 
     res.json({
       success: true,
@@ -905,7 +893,7 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
       message: 'Sesi WhatsApp berhasil diputuskan.',
     });
   } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+    res.status(500).json({ error: err?.message || 'Gagal memutuskan sesi' });
   }
 });
 
