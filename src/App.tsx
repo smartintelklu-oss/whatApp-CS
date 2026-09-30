@@ -27,8 +27,26 @@ export default function App() {
   const [waPhone, setWaPhone] = useState<string>('+62 812-9876-5432');
   const [connectedAt, setConnectedAt] = useState<string>(new Date().toISOString());
 
-  // Fetch initial WhatsApp status from server
-  useEffect(() => {
+  // Sync contacts, messages, and WhatsApp status with central server (Shared across all devices)
+  const syncServerData = () => {
+    fetch('/api/contacts')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data?.contacts) && data.contacts.length > 0) {
+          setContacts(data.contacts);
+        }
+      })
+      .catch((err) => console.error('Failed to sync contacts:', err));
+
+    fetch('/api/messages')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.messages && typeof data.messages === 'object') {
+          setMessages(data.messages);
+        }
+      })
+      .catch((err) => console.error('Failed to sync messages:', err));
+
     fetch('/api/whatsapp/status')
       .then((res) => res.json())
       .then((data) => {
@@ -39,6 +57,14 @@ export default function App() {
         }
       })
       .catch((err) => console.error(err));
+  };
+
+  useEffect(() => {
+    syncServerData();
+
+    // Auto-sync every 3 seconds so incoming messages & contacts appear across all devices in real-time
+    const interval = setInterval(syncServerData, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   // Modals state
@@ -75,35 +101,23 @@ export default function App() {
 
   // When a scheduled message fires or is triggered manually
   const handleExecuteScheduledMessage = (item: ScheduledMessage) => {
-    // Deliver to targeted contact or all contacts
-    const targetContactIds =
+    const targetContacts =
       item.targetType === 'all'
-        ? contacts.map((c) => c.id)
+        ? contacts
         : item.targetType === 'tag'
-        ? contacts.filter((c) => c.tag === item.targetValue).map((c) => c.id)
-        : [contacts[0]?.id || 'c1'];
+        ? contacts.filter((c) => c.tag === item.targetValue)
+        : contacts.filter((c) => c.id === item.targetValue || c.phone === item.targetValue);
 
-    const newMsg: WhatsAppMessage = {
-      id: 'sch_msg_' + Date.now(),
-      contactId: targetContactIds[0] || 'c1',
-      sender: 'agent',
-      senderName: 'Broadcast Otomatis',
-      text: item.messageText,
-      timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      status: 'delivered',
-      mediaType: item.mediaType,
-      mediaUrl: item.mediaUrl,
-      mediaName: item.mediaName,
-      mediaSize: item.mediaSize,
-    };
+    const recipients = targetContacts.length > 0 ? targetContacts : [contacts[0]];
 
-    setMessages((prev) => {
-      const updated = { ...prev };
-      targetContactIds.forEach((cId) => {
-        const list = updated[cId] || [];
-        updated[cId] = [...list, { ...newMsg, id: `sch_${cId}_${Date.now()}`, contactId: cId }];
+    recipients.forEach((contact) => {
+      if (!contact) return;
+      handleSendMessage(contact.id, item.messageText, 'agent', {
+        mediaType: item.mediaType,
+        mediaUrl: item.mediaUrl,
+        mediaName: item.mediaName,
+        mediaSize: item.mediaSize,
       });
-      return updated;
     });
   };
 
@@ -132,7 +146,36 @@ export default function App() {
     setScheduledMessages((prev) => prev.filter((m) => m.id !== id));
   };
 
-  // Send message manually from agent
+  // Add contact to server and local state (Available across all devices)
+  const handleAddContact = async (contactData: {
+    name: string;
+    phone: string;
+    tag: 'Prospek' | 'Pelanggan Baru' | 'Komplain' | 'VIP' | 'Selesai';
+    notes?: string;
+    isAiAutoReplyEnabled: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contactData),
+      });
+      const data = await res.json();
+      if (data.success && data.contact) {
+        setContacts((prev) => {
+          const filtered = prev.filter((c) => c.id !== data.contact.id);
+          return [data.contact, ...filtered];
+        });
+        setActiveContactId(data.contact.id);
+        setActiveTab('inbox');
+        return data.contact;
+      }
+    } catch (err) {
+      console.error('Error adding contact:', err);
+    }
+  };
+
+  // Send message manually from agent or bot (Real WhatsApp Delivery)
   const handleSendMessage = (
     contactId: string,
     text: string,
@@ -148,15 +191,18 @@ export default function App() {
       aiReasoning?: string;
     }
   ) => {
-    const msgId = 'msg_' + Date.now();
-    const newMsg: WhatsAppMessage = {
-      id: msgId,
+    const tempId = 'msg_' + Date.now();
+    const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const targetContact = contacts.find((c) => c.id === contactId);
+
+    const tempMsg: WhatsAppMessage = {
+      id: tempId,
       contactId,
       sender,
       senderName: sender === 'bot' ? 'Asisten CS AI' : 'CS Admin',
       text,
-      timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      status: 'delivered',
+      timestamp: timeStr,
+      status: 'sent',
       mediaType: options?.mediaType || 'none',
       mediaUrl: options?.mediaUrl,
       mediaName: options?.mediaName,
@@ -167,9 +213,10 @@ export default function App() {
       aiReasoning: options?.aiReasoning,
     };
 
+    // Optimistic UI update
     setMessages((prev) => ({
       ...prev,
-      [contactId]: [...(prev[contactId] || []), newMsg],
+      [contactId]: [...(prev[contactId] || []), tempMsg],
     }));
 
     // Update contact preview
@@ -178,12 +225,43 @@ export default function App() {
         c.id === contactId
           ? {
               ...c,
-              lastMessageTime: newMsg.timestamp,
+              lastMessageTime: timeStr,
               unreadCount: 0,
             }
           : c
       )
     );
+
+    // Call server to send through WhatsApp Web gateway and persist
+    fetch('/api/whatsapp/send-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contactId,
+        recipientPhone: targetContact?.phone,
+        text,
+        mediaType: options?.mediaType || 'none',
+        mediaUrl: options?.mediaUrl,
+        mediaName: options?.mediaName,
+        mediaSize: options?.mediaSize,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.message) {
+          // Replace temp message with server confirmed message
+          setMessages((prev) => ({
+            ...prev,
+            [contactId]: [
+              ...(prev[contactId] || []).filter((m) => m.id !== tempId),
+              data.message,
+            ],
+          }));
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to send message via gateway:', err);
+      });
   };
 
   // Simulate Incoming Message from a customer
@@ -385,6 +463,9 @@ export default function App() {
             isAiGenerating={isAiGenerating}
             botSettings={botSettings}
             onToggleContactAi={handleToggleContactAi}
+            onAddContact={handleAddContact}
+            waStatus={waStatus}
+            onOpenPairingModal={() => setIsPairingModalOpen(true)}
           />
         )}
 

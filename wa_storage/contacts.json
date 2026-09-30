@@ -1,0 +1,80 @@
+[
+  {
+    "id": "cust_1790747874984",
+    "name": "Hendra Saputra",
+    "phone": "+62 812-9876-5432",
+    "avatar": "https://images.unsplash.com/photo-1534528742745?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 0,
+    "tag": "VIP",
+    "lastMessageTime": "05.57",
+    "notes": "Pelanggan setia grosir",
+    "totalOrders": 0,
+    "lifetimeValue": "Rp 0",
+    "isAiAutoReplyEnabled": true
+  },
+  {
+    "id": "c1",
+    "name": "Budi Santoso",
+    "phone": "+62 812-4455-6677",
+    "avatar": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 1,
+    "tag": "Prospek",
+    "lastMessageTime": "11:18",
+    "notes": "Tertarik beli Smartphone Pro Max untuk hadiah kantor.",
+    "totalOrders": 0,
+    "lifetimeValue": "Rp 0",
+    "isAiAutoReplyEnabled": true
+  },
+  {
+    "id": "c2",
+    "name": "Siti Rahmayanti",
+    "phone": "+62 856-7890-1234",
+    "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 0,
+    "tag": "Komplain",
+    "lastMessageTime": "10:42",
+    "notes": "Paket agak terlambat di pihak ekspedisi J&T. Butuh cek status resi.",
+    "totalOrders": 3,
+    "lifetimeValue": "Rp 4.800.000",
+    "isAiAutoReplyEnabled": true
+  },
+  {
+    "id": "c3",
+    "name": "Hendro Wijaya",
+    "phone": "+62 818-1234-5678",
+    "avatar": "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 0,
+    "tag": "VIP",
+    "lastMessageTime": "Kemarin",
+    "notes": "Pelanggan korporat, repeat order rutin aksesoris kantor.",
+    "totalOrders": 8,
+    "lifetimeValue": "Rp 32.500.000",
+    "isAiAutoReplyEnabled": true
+  },
+  {
+    "id": "c4",
+    "name": "Dewi Lestari",
+    "phone": "+62 877-9988-1122",
+    "avatar": "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 0,
+    "tag": "Pelanggan Baru",
+    "lastMessageTime": "Kemarin",
+    "notes": "Menanyakan ketersediaan cicilan 0% kartu kredit.",
+    "totalOrders": 1,
+    "lifetimeValue": "Rp 2.850.000",
+    "isAiAutoReplyEnabled": true
+  },
+  {
+    "id": "c5",
+    "name": "Ahmad Fauzi",
+    "phone": "+62 821-6543-9870",
+    "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 0,
+    "tag": "Selesai",
+    "lastMessageTime": "23 Sep",
+    "notes": "Sudah selesai komplain charger, unit pengganti sudah sampai.",
+    "totalOrders": 2,
+    "lifetimeValue": "Rp 1.150.000",
+    "isAiAutoReplyEnabled": true
+  }
+]

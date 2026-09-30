@@ -42,8 +42,10 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
 
   // Live QR data from server
   const [liveQrDataUrl, setLiveQrDataUrl] = useState<string>('');
+  const [liveQrUrlData, setLiveQrUrlData] = useState<string>('');
+  const [qrDisplayMode, setQrDisplayMode] = useState<'scanner' | 'camera'>('scanner');
   const [countdown, setCountdown] = useState<number>(40);
-  const [isLoadingQr, setIsLoadingQr] = useState<boolean>(false);
+  const [isLoadingQr, setIsLoadingQr] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // 8-Digit Pairing Code states
@@ -57,27 +59,6 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
   const [simName, setSimName] = useState<string>('Nusantara Care CS Bot');
   const [simPhone, setSimPhone] = useState<string>('+62 812-9876-5432');
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
-
-  // Generate fallback visual QR code instantly so the user never sees a blank loading box
-  const generateInstantInitialQr = async () => {
-    try {
-      const randomSeed = Math.random().toString(36).substring(2, 12);
-      const initialQrString = `2@wa_connect_${randomSeed},AAdBdYv8Pc5S9I11qrHkPVt5GJVjz8QW0nYOvrfGrxM=,NfkVlY+CXlE8Dtss98U3tOjuXq01vfxZHCHyIULBjg0=,0q1+IsS+7NafHZh3+uGybv65G397oR6Fwd/mB/oI8y0=,1`;
-      const url = await QRCode.toDataURL(initialQrString, {
-        width: 320,
-        margin: 2,
-        errorCorrectionLevel: 'M',
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
-      });
-      setLiveQrDataUrl((prev) => prev || url);
-      setIsLoadingQr(false);
-    } catch (e) {
-      console.error('Error generating instant QR:', e);
-    }
-  };
 
   // Fetch live WhatsApp Web status and QR code from server
   const fetchStatusAndQr = async () => {
@@ -96,6 +77,9 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
         const qr = data.qrCodeData || data.session?.qrCodeData;
         if (qr) {
           setLiveQrDataUrl(qr);
+          if (data.qrCodeUrlData) {
+            setLiveQrUrlData(data.qrCodeUrlData);
+          }
           setIsLoadingQr(false);
           if (data.qrExpiresAt) {
             const remaining = Math.max(0, Math.floor((data.qrExpiresAt - Date.now()) / 1000));
@@ -116,18 +100,15 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
     }
   };
 
-  // Poll status while modal is open & ensure initial QR is present
+  // Poll status while modal is open
   useEffect(() => {
     if (!isOpen) return;
 
-    if (!liveQrDataUrl) {
-      generateInstantInitialQr();
-    }
     fetchStatusAndQr();
 
     const interval = setInterval(() => {
       fetchStatusAndQr();
-    }, 2500);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [isOpen, status]);
@@ -154,10 +135,22 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await fetch('/api/whatsapp/refresh-qr', { method: 'POST' });
-      await fetchStatusAndQr();
+      const res = await fetch('/api/whatsapp/refresh-qr', { method: 'POST' });
+      const data = await res.json();
+      if (data?.qrCodeData) {
+        setLiveQrDataUrl(data.qrCodeData);
+        if (data.qrCodeUrlData) setLiveQrUrlData(data.qrCodeUrlData);
+        setIsLoadingQr(false);
+        if (data.qrExpiresAt) {
+          const remaining = Math.max(0, Math.floor((data.qrExpiresAt - Date.now()) / 1000));
+          setCountdown(remaining > 0 ? remaining : 40);
+        }
+      } else {
+        await fetchStatusAndQr();
+      }
     } catch (e) {
       console.error(e);
+      await fetchStatusAndQr();
     } finally {
       setIsRefreshing(false);
     }
@@ -417,11 +410,37 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
 
                   {/* Right: Live Authentic WhatsApp Web QR */}
                   <div className="flex flex-col items-center justify-center p-5 bg-slate-50 rounded-2xl border border-slate-200">
+                    {/* Toggle Format: In-App Scanner vs Native Phone Camera */}
+                    <div className="flex items-center bg-slate-200/80 p-0.5 rounded-lg mb-3 text-[11px] font-medium w-full max-w-[240px]">
+                      <button
+                        type="button"
+                        onClick={() => setQrDisplayMode('scanner')}
+                        className={`flex-1 py-1 px-2 rounded-md transition-all text-center cursor-pointer ${
+                          qrDisplayMode === 'scanner'
+                            ? 'bg-white text-emerald-800 font-bold shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Scanner WhatsApp
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQrDisplayMode('camera')}
+                        className={`flex-1 py-1 px-2 rounded-md transition-all text-center cursor-pointer ${
+                          qrDisplayMode === 'camera'
+                            ? 'bg-white text-emerald-800 font-bold shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Kamera HP
+                      </button>
+                    </div>
+
                     <div className="relative p-3 bg-white rounded-xl shadow-md border border-slate-200 flex items-center justify-center min-w-[230px] min-h-[230px]">
                       {liveQrDataUrl ? (
                         <div className="relative">
                           <img
-                            src={liveQrDataUrl}
+                            src={qrDisplayMode === 'scanner' ? liveQrDataUrl : (liveQrUrlData || liveQrDataUrl)}
                             alt="WhatsApp Web Multi-Device QR Code"
                             className="w-52 h-52 object-contain rounded-lg"
                           />
@@ -435,16 +454,21 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
                           )}
                         </div>
                       ) : (
-                        <div className="w-52 h-52 flex flex-col items-center justify-center text-slate-400 gap-2">
-                          <RefreshCw className="w-7 h-7 animate-spin text-emerald-600" />
-                          <span className="text-xs font-medium text-slate-500">
-                            Memuat QR Code WhatsApp...
-                          </span>
+                        <div className="w-52 h-52 flex flex-col items-center justify-center text-slate-400 gap-2.5 p-4 text-center">
+                          <RefreshCw className="w-8 h-8 animate-spin text-emerald-600" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold text-slate-700">
+                              Menghubungkan ke Server WhatsApp...
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              Mengambil handshake resmi dari web.whatsapp.com
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between w-full max-w-[230px] text-[11px] text-slate-500">
+                    <div className="mt-3 flex items-center justify-between w-full max-w-[240px] text-[11px] text-slate-500">
                       <span className="font-mono">
                         Segar kembali: <strong className="text-slate-800">{countdown}s</strong>
                       </span>
@@ -458,9 +482,9 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
                       </button>
                     </div>
 
-                    <div className="mt-2 text-center flex flex-col items-center gap-2 w-full max-w-[230px]">
+                    <div className="mt-2 text-center flex flex-col items-center gap-2 w-full max-w-[240px]">
                       <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 font-medium bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                        <ShieldCheck className="w-3 h-3 text-emerald-600" /> Live WhatsApp Web Handshake
+                        <ShieldCheck className="w-3 h-3 text-emerald-600" /> Server Resmi web.whatsapp.com
                       </span>
 
                       {/* Instant Link / Pair Button directly on Tab 1 */}

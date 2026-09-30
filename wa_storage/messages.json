@@ -1,0 +1,59 @@
+{
+  "c1": [
+    {
+      "id": "m1_1",
+      "contactId": "c1",
+      "sender": "customer",
+      "senderName": "Budi Santoso",
+      "text": "Halo selamat siang CS Toko Nusantara Digital. Mau tanya apakah Smartphone Pro Max masih ready stock yang warna Deep Black?",
+      "timestamp": "11:15",
+      "status": "read"
+    },
+    {
+      "id": "m1_2",
+      "contactId": "c1",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Halo Kak Budi Santoso! Terima kasih sudah menghubungi Toko Nusantara Digital. 😊\n\nUntuk *Smartphone Pro Max warna Deep Black* stoknya saat ini *READY* dan bergaransi resmi 1 tahun seharga Rp 14.500.000.\n\nApakah Kakak ingin kami bantu siapkan pesanan atau butuh brosur spesifikasi lengkapnya?",
+      "timestamp": "11:15",
+      "status": "read",
+      "isAiGenerated": true,
+      "aiIntent": "tanya_produk_dan_stok",
+      "aiConfidence": 0.98,
+      "aiReasoning": "Mendeteksi pertanyaan ketersediaan warna Deep Black pada produk Smartphone Pro Max."
+    },
+    {
+      "id": "m1_3",
+      "contactId": "c1",
+      "sender": "customer",
+      "senderName": "Budi Santoso",
+      "text": "Apakah bisa kirim hari ini pakai Gosend Instant ke Jakarta Selatan kak? Dan ada promo potongan harga tidak?",
+      "timestamp": "11:18",
+      "status": "delivered"
+    }
+  ],
+  "c2": [
+    {
+      "id": "m2_1",
+      "contactId": "c2",
+      "sender": "customer",
+      "senderName": "Siti Rahmayanti",
+      "text": "Siang kak, pesanan headphone saya no invoice #INV-9821 statusnya masih di gudang ekspedisi dari kemarin, tolong dicek ya.",
+      "timestamp": "10:40",
+      "status": "read"
+    },
+    {
+      "id": "m2_2",
+      "contactId": "c2",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Halo Kak Siti Rahmayanti, mohon maaf sekali atas ketidaknyamanannya terkait keterlambatan pengiriman headphone Kakak. 🙏\n\nNomor pesanan *#INV-9821* sudah kami teruskan langsung ke tim logistik ekspedisi untuk dipercepat status pengantarannya hari ini.",
+      "timestamp": "10:41",
+      "status": "read",
+      "isAiGenerated": true,
+      "aiIntent": "cek_status_pesanan",
+      "aiConfidence": 0.95,
+      "aiReasoning": "Mendeteksi pertanyaan status pengiriman untuk invoice #INV-9821."
+    }
+  ]
+}

@@ -22,6 +22,8 @@ import {
   Sliders,
   X,
   MessageSquarePlus,
+  UserPlus,
+  AlertTriangle,
 } from 'lucide-react';
 import { WhatsAppContact, WhatsAppMessage, CSBotSettings } from '../types';
 import { QUICK_REPLY_TEMPLATES } from '../data/initialData';
@@ -50,6 +52,15 @@ interface ChatInboxViewProps {
   isAiGenerating: boolean;
   botSettings: CSBotSettings;
   onToggleContactAi: (contactId: string) => void;
+  onAddContact?: (contact: {
+    name: string;
+    phone: string;
+    tag: 'Prospek' | 'Pelanggan Baru' | 'Komplain' | 'VIP' | 'Selesai';
+    notes?: string;
+    isAiAutoReplyEnabled: boolean;
+  }) => Promise<any> | void;
+  waStatus?: 'connected' | 'disconnected' | 'qr_ready' | 'authenticating';
+  onOpenPairingModal?: () => void;
 }
 
 export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
@@ -62,6 +73,9 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
   isAiGenerating,
   botSettings,
   onToggleContactAi,
+  onAddContact,
+  waStatus,
+  onOpenPairingModal,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTag, setFilterTag] = useState<string>('all');
@@ -71,6 +85,15 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null);
+
+  // Add Contact Modal State
+  const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactTag, setNewContactTag] = useState<'Prospek' | 'Pelanggan Baru' | 'Komplain' | 'VIP' | 'Selesai'>('Prospek');
+  const [newContactNotes, setNewContactNotes] = useState('');
+  const [newContactAi, setNewContactAi] = useState(true);
+  const [isSavingContact, setIsSavingContact] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatImageInputRef = useRef<HTMLInputElement>(null);
@@ -246,17 +269,26 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
       <div className="w-80 sm:w-96 border-r border-slate-200 flex flex-col bg-white shrink-0">
         {/* Search & Actions Bar */}
         <div className="p-3.5 border-b border-slate-200 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Manajemen Percakapan ({contacts.length})
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs font-bold text-slate-900 uppercase tracking-wider truncate">
+              Pelanggan ({contacts.length})
             </span>
-            <button
-              onClick={onSimulateIncomingOpen}
-              className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors border border-emerald-200"
-              title="Simulasikan pesan masuk dari pelanggan"
-            >
-              <MessageSquarePlus className="w-3.5 h-3.5" /> Uji Pesan Masuk
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setIsAddContactModalOpen(true)}
+                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs font-semibold rounded-lg flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                title="Tambah nomor kontak pelanggan baru ke semua perangkat"
+              >
+                <UserPlus className="w-3.5 h-3.5" /> Tambah Kontak
+              </button>
+              <button
+                onClick={onSimulateIncomingOpen}
+                className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors border border-slate-200 cursor-pointer"
+                title="Simulasikan pesan masuk dari pelanggan"
+              >
+                <MessageSquarePlus className="w-3.5 h-3.5" /> Uji Chat
+              </button>
+            </div>
           </div>
 
           <div className="relative">
@@ -447,6 +479,21 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              {waStatus === 'connected' ? (
+                <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  WA Terhubung
+                </span>
+              ) : (
+                <button
+                  onClick={onOpenPairingModal}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 cursor-pointer"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                  Tautkan WA
+                </button>
+              )}
+
               {/* Contact AI Toggle */}
               <button
                 onClick={() => onToggleContactAi(activeContact.id)}
@@ -475,6 +522,24 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Warning Banner if WhatsApp Disconnected */}
+          {waStatus !== 'connected' && (
+            <div className="relative z-10 px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs text-amber-900 gap-2 shrink-0">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  <strong>Perhatian:</strong> WhatsApp belum terhubung. Pesan Anda tersimpan di sistem, namun belum terkirim ke ponsel pelanggan sampai sesi WhatsApp ditautkan.
+                </span>
+              </div>
+              <button
+                onClick={onOpenPairingModal}
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold shrink-0 cursor-pointer shadow-2xs"
+              >
+                Tautkan WA
+              </button>
+            </div>
+          )}
 
           {/* Messages Feed */}
           <div className="relative z-10 flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5">
@@ -570,9 +635,11 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
                       {isMe && (
                         <span>
                           {msg.status === 'read' ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-blue-500 inline" />
+                            <CheckCheck className="w-3.5 h-3.5 text-blue-500 inline" title="Dibaca di WhatsApp Pelanggan" />
+                          ) : msg.status === 'delivered' ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-slate-400 inline" title="Tersampaikan ke WhatsApp Pelanggan" />
                           ) : (
-                            <Check className="w-3.5 h-3.5 text-slate-400 inline" />
+                            <Check className="w-3.5 h-3.5 text-slate-400 inline" title="Terkirim dari Sistem" />
                           )}
                         </span>
                       )}
@@ -872,6 +939,154 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tambah Pelanggan Baru Modal (Syncs Across All Devices) */}
+      {isAddContactModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 bg-emerald-800 text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-900/80 rounded-xl">
+                  <UserPlus className="w-5 h-5 text-emerald-300" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">Tambah Pelanggan Baru</h3>
+                  <p className="text-[11px] text-emerald-200">Tersinkronisasi otomatis ke semua perangkat</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAddContactModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-emerald-700/60 text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!newContactName.trim() || !newContactPhone.trim()) return;
+                setIsSavingContact(true);
+                try {
+                  if (onAddContact) {
+                    await onAddContact({
+                      name: newContactName.trim(),
+                      phone: newContactPhone.trim(),
+                      tag: newContactTag,
+                      notes: newContactNotes.trim(),
+                      isAiAutoReplyEnabled: newContactAi,
+                    });
+                  }
+                  setIsAddContactModalOpen(false);
+                  setNewContactName('');
+                  setNewContactPhone('');
+                  setNewContactNotes('');
+                } catch (err) {
+                  console.error(err);
+                } finally {
+                  setIsSavingContact(false);
+                }
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Nama Pelanggan <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newContactName}
+                  onChange={(e) => setNewContactName(e.target.value)}
+                  placeholder="Contoh: Hendra Setiawan"
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Nomor WhatsApp <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newContactPhone}
+                  onChange={(e) => setNewContactPhone(e.target.value)}
+                  placeholder="Contoh: 081234567890 atau +62 812-3456-7890"
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Nomor dengan awalan 08... akan otomatis dikonversi ke format resmi +62... agar pesan dapat sampai ke WhatsApp pelanggan.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Kategori / Tag
+                  </label>
+                  <select
+                    value={newContactTag}
+                    onChange={(e) => setNewContactTag(e.target.value as any)}
+                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="Prospek">Prospek</option>
+                    <option value="Pelanggan Baru">Pelanggan Baru</option>
+                    <option value="VIP">VIP</option>
+                    <option value="Komplain">Komplain</option>
+                    <option value="Selesai">Selesai</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <label className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-100">
+                    <input
+                      type="checkbox"
+                      checked={newContactAi}
+                      onChange={(e) => setNewContactAi(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-xs font-semibold text-slate-700">Auto-Reply AI Aktif</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Catatan Pelanggan (Opsional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newContactNotes}
+                  onChange={(e) => setNewContactNotes(e.target.value)}
+                  placeholder="Informasi kebutuhan, riwayat tanya produk, dll..."
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddContactModalOpen(false)}
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingContact}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  {isSavingContact ? 'Menyimpan...' : 'Simpan & Sinkronkan'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
