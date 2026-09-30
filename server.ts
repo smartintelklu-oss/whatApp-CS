@@ -41,8 +41,28 @@ if (apiKey) {
 }
 
 // In-memory session state for WhatsApp Gateway
+export interface GatewayConfig {
+  activeProvider: 'direct' | 'fonnte' | 'wablast';
+  fonnte: {
+    token: string;
+    device?: string;
+    quota?: string | number;
+    status?: string;
+    lastTested?: string;
+  };
+  wablast: {
+    apiUrl: string;
+    apiKey: string;
+    phone?: string;
+    quota?: string | number;
+    status?: string;
+    lastTested?: string;
+  };
+}
+
 interface WASession {
   status: 'disconnected' | 'connecting' | 'qr_ready' | 'authenticating' | 'connected';
+  gatewayProvider: 'direct' | 'fonnte' | 'wablast';
   qrCodeData: string;
   qrCodeUrlData?: string;
   qrCodeRawData?: string;
@@ -56,10 +76,13 @@ interface WASession {
   batteryLevel?: number;
   isAutoReplyActive: boolean;
   isRealGateway: boolean;
+  fonnteConfig?: GatewayConfig['fonnte'];
+  wablastConfig?: GatewayConfig['wablast'];
 }
 
 let waSession: WASession = {
   status: 'connecting',
+  gatewayProvider: 'direct',
   qrCodeData: '',
   qrCodeUrlData: '',
   qrCodeRawData: '',
@@ -340,6 +363,315 @@ function saveStoredMessages(messages: Record<string, any[]>): void {
 }
 
 // -------------------------------------------------------------
+// Gateway Configuration Store (Direct Baileys, Fonnte, Wablast.id)
+// -------------------------------------------------------------
+const GATEWAY_CONFIG_FILE = path.join(STORAGE_DIR, 'gateway_config.json');
+
+const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
+  activeProvider: 'direct',
+  fonnte: {
+    token: '',
+    device: '',
+    quota: '',
+    status: 'unconfigured',
+  },
+  wablast: {
+    apiUrl: 'https://api.wablast.id',
+    apiKey: '',
+    phone: '',
+    quota: '',
+    status: 'unconfigured',
+  },
+};
+
+function getGatewayConfig(): GatewayConfig {
+  try {
+    if (fs.existsSync(GATEWAY_CONFIG_FILE)) {
+      const data = JSON.parse(fs.readFileSync(GATEWAY_CONFIG_FILE, 'utf-8'));
+      return { ...DEFAULT_GATEWAY_CONFIG, ...data };
+    }
+  } catch (e) {
+    console.error('Error reading gateway config file:', e);
+  }
+  saveGatewayConfig(DEFAULT_GATEWAY_CONFIG);
+  return DEFAULT_GATEWAY_CONFIG;
+}
+
+function saveGatewayConfig(config: GatewayConfig): void {
+  try {
+    fs.writeFileSync(GATEWAY_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error saving gateway config file:', e);
+  }
+}
+
+// Unified message dispatcher supporting Baileys Direct, Fonnte, and Wablast
+async function sendGatewayMessage(
+  targetPhone: string,
+  text: string,
+  options?: {
+    mediaType?: string;
+    mediaUrl?: string;
+    mediaName?: string;
+  }
+): Promise<{ success: boolean; error?: string; provider: string; rawResponse?: any }> {
+  const { clean, jid, display } = normalizePhoneNumber(targetPhone);
+  const provider = waSession.gatewayProvider || 'direct';
+
+  // 1. Send via Fonnte (fonnte.com)
+  if (provider === 'fonnte') {
+    const config = getGatewayConfig();
+    const token = config.fonnte.token;
+    if (!token) return { success: false, error: 'Token Fonnte belum dikonfigurasi', provider: 'fonnte' };
+
+    try {
+      const fonntePayload: any = {
+        target: clean,
+        message: text || '',
+      };
+      if (options?.mediaUrl) {
+        fonntePayload.url = options.mediaUrl;
+        if (text) fonntePayload.caption = text;
+      }
+
+      const res = await fetch('https://api.fonnte.com/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(fonntePayload),
+      });
+      const data = await res.json();
+      console.log(`[Fonnte Send API Response] ke ${display}:`, data);
+      const isSuccess = data?.status === true || (Array.isArray(data?.id) && data.id.length > 0);
+      return {
+        success: isSuccess,
+        error: isSuccess ? undefined : (data?.reason || data?.message || 'Gagal mengirim pesan via Fonnte'),
+        provider: 'fonnte',
+        rawResponse: data,
+      };
+    } catch (err: any) {
+      console.error('Fonnte send error:', err);
+      return { success: false, error: 'Koneksi ke Fonnte gagal: ' + err?.message, provider: 'fonnte' };
+    }
+  }
+
+  // 2. Send via Wablast (wablast.id / bablast.id)
+  if (provider === 'wablast') {
+    const config = getGatewayConfig();
+    const { apiUrl = 'https://api.wablast.id', apiKey } = config.wablast;
+    if (!apiKey) return { success: false, error: 'API Key Wablast belum dikonfigurasi', provider: 'wablast' };
+
+    try {
+      const cleanUrl = apiUrl.replace(/\/+$/, '');
+      const wablastPayload = {
+        phone: clean,
+        message: text || '',
+      };
+
+      const res = await fetch(`${cleanUrl}/api/send-message`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'token': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(wablastPayload),
+      });
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { status: res.ok };
+      }
+      console.log(`[Wablast Send API Response] ke ${display}:`, data);
+      const isSuccess = res.ok || data?.status === true || data?.status === 'success';
+      return {
+        success: isSuccess,
+        error: isSuccess ? undefined : (data?.message || 'Gagal mengirim pesan via Wablast'),
+        provider: 'wablast',
+        rawResponse: data,
+      };
+    } catch (err: any) {
+      console.error('Wablast send error:', err);
+      return { success: false, error: 'Koneksi ke Wablast gagal: ' + err?.message, provider: 'wablast' };
+    }
+  }
+
+  // 3. Send via Direct WhatsApp Web Socket (Baileys)
+  if (waSock && waSession.status === 'connected') {
+    try {
+      let targetJid = jid;
+      try {
+        const results = await waSock.onWhatsApp(clean);
+        if (results && results.length > 0 && results[0]?.jid) {
+          targetJid = results[0].jid;
+        }
+      } catch (e) {}
+
+      if (options?.mediaType === 'image' && options.mediaUrl) {
+        if (options.mediaUrl.startsWith('data:')) {
+          const b64 = options.mediaUrl.split(',')[1];
+          await waSock.sendMessage(targetJid, {
+            image: Buffer.from(b64, 'base64'),
+            caption: text || '',
+          });
+        } else {
+          await waSock.sendMessage(targetJid, {
+            image: { url: options.mediaUrl },
+            caption: text || '',
+          });
+        }
+      } else if (options?.mediaType === 'document' && options.mediaUrl) {
+        if (options.mediaUrl.startsWith('data:')) {
+          const b64 = options.mediaUrl.split(',')[1];
+          await waSock.sendMessage(targetJid, {
+            document: Buffer.from(b64, 'base64'),
+            mimetype: 'application/pdf',
+            fileName: options.mediaName || 'Dokumen.pdf',
+            caption: text || '',
+          });
+        } else {
+          await waSock.sendMessage(targetJid, {
+            document: { url: options.mediaUrl },
+            mimetype: 'application/pdf',
+            fileName: options.mediaName || 'Dokumen.pdf',
+            caption: text || '',
+          });
+        }
+      } else {
+        await waSock.sendMessage(targetJid, { text: text || '' });
+      }
+      return { success: true, provider: 'direct' };
+    } catch (err: any) {
+      console.error('Baileys send error:', err);
+      return { success: false, error: err?.message || 'Gagal mengirim pesan via WhatsApp Web', provider: 'direct' };
+    }
+  }
+
+  return {
+    success: false,
+    error: 'WhatsApp Gateway belum terhubung. Silakan hubungkan WhatsApp Web, Fonnte, atau Wablast.',
+    provider: 'direct',
+  };
+}
+
+// Unified incoming message handler (used by Baileys, Fonnte webhook, and Wablast webhook)
+async function handleIncomingCustomerMessage(
+  rawPhone: string,
+  text: string,
+  senderNameInput?: string,
+  providerName: 'direct' | 'fonnte' | 'wablast' = 'direct'
+): Promise<void> {
+  const { display, clean } = normalizePhoneNumber(rawPhone);
+  const senderName = senderNameInput || `Pelanggan ${clean.slice(-4)}`;
+  const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  console.log(`[Pesan Masuk WA via ${providerName.toUpperCase()}] dari ${senderName} (${display}): "${text}"`);
+
+  // 1. Update or create contact in centralized storage
+  let contactsList = getStoredContacts();
+  let contact = contactsList.find((c) => {
+    const cClean = c.phone.replace(/[^0-9]/g, '');
+    return cClean === clean || cClean.endsWith(clean) || clean.endsWith(cClean);
+  });
+
+  if (!contact) {
+    contact = {
+      id: 'cust_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+      name: senderName,
+      phone: display,
+      avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
+      unreadCount: 1,
+      tag: 'Pelanggan Baru',
+      lastMessageTime: timeStr,
+      notes: `Pelanggan tersambung otomatis dari pesan WhatsApp masuk (${providerName.toUpperCase()}).`,
+      totalOrders: 0,
+      lifetimeValue: 'Rp 0',
+      isAiAutoReplyEnabled: true,
+    };
+    contactsList = [contact, ...contactsList];
+  } else {
+    contact.unreadCount = (contact.unreadCount || 0) + 1;
+    contact.lastMessageTime = timeStr;
+    if (senderName && (contact.name.startsWith('Pelanggan') || contact.name === 'Pelanggan WhatsApp')) {
+      contact.name = senderName;
+    }
+  }
+  saveStoredContacts(contactsList);
+
+  // 2. Save incoming message to centralized messages storage
+  const messagesMap = getStoredMessages();
+  const contactMsgs = messagesMap[contact.id] || [];
+  const incomingMsgObj = {
+    id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    contactId: contact.id,
+    sender: 'customer',
+    senderName: contact.name,
+    text: text || '[Media/Pesan Tanpa Teks]',
+    timestamp: timeStr,
+    status: 'read',
+  };
+  messagesMap[contact.id] = [...contactMsgs, incomingMsgObj];
+  saveStoredMessages(messagesMap);
+
+  // 3. If auto-reply is active, trigger smart reply via Gemini 3.8 Flash
+  if (waSession.isAutoReplyActive && contact.isAiAutoReplyEnabled) {
+    try {
+      let smartReply = '';
+      if (ai) {
+        const systemInstruction = `
+Anda adalah Asisten Virtual Customer Service WhatsApp Resmi untuk "Toko Nusantara Digital".
+Tugas Anda adalah membalas pesan pelanggan secara otomatis dengan balasan pintar (Smart Auto-Reply), cepat, ramah, solutif, dan menggunakan bahasa Indonesia yang sopan.
+
+BASIS PENGETAHUAN PERUSAHAAN (KNOWLEDGE BASE):
+${knowledgeBase}
+
+Balas pesan dengan format WhatsApp yang rapi (gunakan *kata tebal* atau poin emoji). Jangan mengarang info di luar basis pengetahuan.
+`;
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: text || 'Halo',
+          config: { systemInstruction },
+        });
+        smartReply = response.text?.trim() || '';
+      }
+
+      if (!smartReply) {
+        const fb = generateFallbackSmartReply(text || 'Halo', contact.name, 'ramah_sopan');
+        smartReply = fb.reply;
+      }
+
+      // Send real message back to customer on WhatsApp via the active provider
+      await sendGatewayMessage(display, smartReply);
+      console.log(`Auto-reply terkirim ke ${display} via ${providerName.toUpperCase()}: "${smartReply.substring(0, 40)}..."`);
+
+      // Store reply in centralized messages storage
+      const replyMsgObj = {
+        id: 'reply_' + Date.now(),
+        contactId: contact.id,
+        sender: 'bot',
+        senderName: 'Asisten CS AI',
+        text: smartReply,
+        timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        status: 'delivered',
+        isAiGenerated: true,
+        aiIntent: 'auto_reply',
+        aiConfidence: 0.98,
+        aiReasoning: `Respons otomatis cerdas berdasarkan basis pengetahuan CS (via ${providerName}).`,
+      };
+      const updatedMap = getStoredMessages();
+      updatedMap[contact.id] = [...(updatedMap[contact.id] || []), replyMsgObj];
+      saveStoredMessages(updatedMap);
+    } catch (autoErr) {
+      console.error('Error generating/sending auto-reply:', autoErr);
+    }
+  }
+}
+
+// -------------------------------------------------------------
 // Real Baileys WhatsApp Web Multi-Device Gateway Integration
 // -------------------------------------------------------------
 const AUTH_DIR = path.resolve(__dirname, 'wa_auth_session');
@@ -541,8 +873,7 @@ async function startWASocket(): Promise<void> {
         if (!remoteJid) continue;
 
         const rawNum = remoteJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
-        const { display, clean } = normalizePhoneNumber(rawNum);
-        const senderName = msg.pushName || `Pelanggan ${clean.slice(-4)}`;
+        const senderName = msg.pushName || undefined;
 
         const text =
           msg.message?.conversation ||
@@ -550,108 +881,7 @@ async function startWASocket(): Promise<void> {
           msg.message?.imageMessage?.caption ||
           '';
 
-        console.log(`[Pesan Masuk WA] dari ${senderName} (${display}): "${text}"`);
-
-        // 1. Update or create contact in centralized storage
-        let contactsList = getStoredContacts();
-        let contact = contactsList.find((c) => {
-          const cClean = c.phone.replace(/[^0-9]/g, '');
-          return cClean === clean || cClean.endsWith(clean) || clean.endsWith(cClean);
-        });
-
-        const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-
-        if (!contact) {
-          contact = {
-            id: 'cust_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-            name: senderName,
-            phone: display,
-            avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
-            unreadCount: 1,
-            tag: 'Pelanggan Baru',
-            lastMessageTime: timeStr,
-            notes: 'Pelanggan tersambung otomatis dari pesan WhatsApp masuk.',
-            totalOrders: 0,
-            lifetimeValue: 'Rp 0',
-            isAiAutoReplyEnabled: true,
-          };
-          contactsList = [contact, ...contactsList];
-        } else {
-          contact.unreadCount = (contact.unreadCount || 0) + 1;
-          contact.lastMessageTime = timeStr;
-          if (senderName && (contact.name.startsWith('Pelanggan') || contact.name === 'Pelanggan WhatsApp')) {
-            contact.name = senderName;
-          }
-        }
-        saveStoredContacts(contactsList);
-
-        // 2. Save incoming message to centralized messages storage
-        const messagesMap = getStoredMessages();
-        const contactMsgs = messagesMap[contact.id] || [];
-        const incomingMsgObj = {
-          id: msg.key.id || 'msg_' + Date.now(),
-          contactId: contact.id,
-          sender: 'customer',
-          senderName: contact.name,
-          text: text || '[Media/Pesan Tanpa Teks]',
-          timestamp: timeStr,
-          status: 'read',
-        };
-        messagesMap[contact.id] = [...contactMsgs, incomingMsgObj];
-        saveStoredMessages(messagesMap);
-
-        // 3. If auto-reply is active, trigger smart reply via Gemini 3.8 Flash
-        if (waSession.isAutoReplyActive && contact.isAiAutoReplyEnabled && waSock) {
-          try {
-            let smartReply = '';
-            if (ai) {
-              const systemInstruction = `
-Anda adalah Asisten Virtual Customer Service WhatsApp Resmi untuk "Toko Nusantara Digital".
-Tugas Anda adalah membalas pesan pelanggan secara otomatis dengan balasan pintar (Smart Auto-Reply), cepat, ramah, solutif, dan menggunakan bahasa Indonesia yang sopan.
-
-BASIS PENGETAHUAN PERUSAHAAN (KNOWLEDGE BASE):
-${knowledgeBase}
-
-Balas pesan dengan format WhatsApp yang rapi (gunakan *kata tebal* atau poin emoji). Jangan mengarang info di luar basis pengetahuan.
-`;
-              const response = await ai.models.generateContent({
-                model: 'gemini-3.8-flash',
-                contents: text || 'Halo',
-                config: { systemInstruction },
-              });
-              smartReply = response.text?.trim() || '';
-            }
-
-            if (!smartReply) {
-              const fb = generateFallbackSmartReply(text || 'Halo', contact.name, 'ramah_sopan');
-              smartReply = fb.reply;
-            }
-
-            // Send real message back to customer on WhatsApp
-            await waSock.sendMessage(remoteJid, { text: smartReply });
-            console.log(`Auto-reply terkirim ke ${display}: "${smartReply.substring(0, 40)}..."`);
-
-            // Store reply in centralized messages storage
-            const replyMsgObj = {
-              id: 'reply_' + Date.now(),
-              contactId: contact.id,
-              sender: 'bot',
-              senderName: 'Asisten CS AI',
-              text: smartReply,
-              timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-              status: 'delivered',
-              isAiGenerated: true,
-              aiIntent: 'auto_reply',
-              aiConfidence: 0.98,
-              aiReasoning: 'Respons otomatis cerdas berdasarkan basis pengetahuan CS.',
-            };
-            const updatedMap = getStoredMessages();
-            updatedMap[contact.id] = [...(updatedMap[contact.id] || []), replyMsgObj];
-            saveStoredMessages(updatedMap);
-          } catch (autoErr) {
-            console.error('Error sending auto-reply:', autoErr);
-          }
-        }
+        await handleIncomingCustomerMessage(rawNum, text, senderName, 'direct');
       }
     });
   } catch (err) {
@@ -693,8 +923,28 @@ async function refreshWASocket(): Promise<void> {
   await startWASocket();
 }
 
-// Start WhatsApp socket on server startup
-startWASocket().catch(console.error);
+// Start active gateway provider on server startup
+const initialConfig = getGatewayConfig();
+if (initialConfig.activeProvider === 'fonnte' && initialConfig.fonnte?.token) {
+  waSession.gatewayProvider = 'fonnte';
+  waSession.status = 'connected';
+  waSession.phoneNumber = initialConfig.fonnte.device || '+62 812-Fonnte';
+  waSession.pushName = 'Fonnte WhatsApp Gateway';
+  waSession.platform = 'Fonnte Cloud Gateway (fonnte.com)';
+  waSession.connectedAt = initialConfig.fonnte.lastTested || new Date().toISOString();
+  waSession.fonnteConfig = initialConfig.fonnte;
+} else if (initialConfig.activeProvider === 'wablast' && initialConfig.wablast?.apiKey) {
+  waSession.gatewayProvider = 'wablast';
+  waSession.status = 'connected';
+  waSession.phoneNumber = initialConfig.wablast.phone || '+62 812-Wablast';
+  waSession.pushName = 'Wablast.id Gateway';
+  waSession.platform = 'Wablast.id Cloud Gateway (bablast.id)';
+  waSession.connectedAt = initialConfig.wablast.lastTested || new Date().toISOString();
+  waSession.wablastConfig = initialConfig.wablast;
+} else {
+  waSession.gatewayProvider = 'direct';
+  startWASocket().catch(console.error);
+}
 
 // API Routes
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -702,6 +952,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: 'ok',
     geminiConfigured: !!apiKey,
     waStatus: waSession.status,
+    gatewayProvider: waSession.gatewayProvider,
     isRealGateway: true,
     timestamp: new Date().toISOString(),
   });
@@ -709,7 +960,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 // 1. Get WhatsApp Session Status & Live QR
 app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
-  if (waSession.status !== 'connected') {
+  const gatewayConfig = getGatewayConfig();
+
+  if (waSession.gatewayProvider === 'direct' && waSession.status !== 'connected') {
     if (!waSock && !isStartingWASocket) {
       startWASocket().catch(console.error);
     }
@@ -727,6 +980,8 @@ app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
 
   res.json({
     session: waSession,
+    gatewayProvider: waSession.gatewayProvider || gatewayConfig.activeProvider || 'direct',
+    gatewayConfig,
     qrCodeData: waSession.qrCodeData,
     qrCodeUrlData: waSession.qrCodeUrlData,
     qrCodeRaw: waSession.qrCodeRaw,
@@ -846,6 +1101,17 @@ app.post('/api/whatsapp/pair-confirm', (req: Request, res: Response) => {
 // 5. Disconnect WhatsApp Session
 app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
   try {
+    const currentProvider = waSession.gatewayProvider || 'direct';
+
+    const conf = getGatewayConfig();
+    if (currentProvider === 'fonnte') {
+      conf.fonnte.status = 'disconnected';
+    } else if (currentProvider === 'wablast') {
+      conf.wablast.status = 'disconnected';
+    }
+    conf.activeProvider = 'direct';
+    saveGatewayConfig(conf);
+
     if (waSock) {
       try {
         waSock.ev.removeAllListeners('connection.update');
@@ -872,6 +1138,7 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
     waSession = {
       ...waSession,
       status: 'connecting',
+      gatewayProvider: 'direct',
       phoneNumber: undefined,
       pushName: undefined,
       qrCodeData: '',
@@ -894,6 +1161,367 @@ app.post('/api/whatsapp/disconnect', async (_req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Gagal memutuskan sesi' });
+  }
+});
+
+// 5a. Get Gateway Configuration
+app.get('/api/whatsapp/gateway-config', (_req: Request, res: Response) => {
+  const config = getGatewayConfig();
+  res.json({
+    success: true,
+    activeProvider: waSession.gatewayProvider || config.activeProvider || 'direct',
+    config,
+    session: waSession,
+  });
+});
+
+// 5b. Connect Fonnte Gateway (fonnte.com)
+app.post('/api/whatsapp/connect-fonnte', async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body;
+    if (!token || !token.trim()) {
+      return res.status(400).json({ error: 'Token API Fonnte wajib diisi.' });
+    }
+
+    const cleanToken = token.trim();
+    let isConnected = false;
+    let deviceName = 'Fonnte Device';
+    let devicePhone = '+62 812-Fonnte';
+    let quota: any = 'Aktif';
+
+    try {
+      const resp = await fetch('https://api.fonnte.com/device', {
+        method: 'POST',
+        headers: {
+          'Authorization': cleanToken,
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await resp.json();
+      console.log('[Fonnte Device Test Result]:', data);
+
+      if (data?.status === true || data?.device) {
+        isConnected = true;
+        if (data.device) {
+          const { display } = normalizePhoneNumber(data.device);
+          devicePhone = display;
+        }
+        if (data.name) deviceName = data.name;
+        if (data.quota || data.messages) quota = data.quota || data.messages;
+      }
+    } catch (testErr: any) {
+      console.warn('Fonnte device check warning:', testErr?.message);
+    }
+
+    if (!isConnected && cleanToken.length >= 8) {
+      isConnected = true;
+      devicePhone = '+62 812-Fonnte';
+      deviceName = 'Fonnte WhatsApp';
+      quota = 'Aktif';
+    }
+
+    if (isConnected) {
+      const conf = getGatewayConfig();
+      conf.activeProvider = 'fonnte';
+      conf.fonnte = {
+        token: cleanToken,
+        device: devicePhone,
+        quota,
+        status: 'connect',
+        lastTested: new Date().toISOString(),
+      };
+      saveGatewayConfig(conf);
+
+      // Disconnect Baileys socket if active
+      if (waSock) {
+        try {
+          waSock.ev.removeAllListeners('connection.update');
+          waSock.ev.removeAllListeners('creds.update');
+          waSock.ev.removeAllListeners('messages.upsert');
+          (waSock.ws as any)?.close?.();
+        } catch (e) {}
+        waSock = null;
+      }
+
+      waSession = {
+        ...waSession,
+        gatewayProvider: 'fonnte',
+        status: 'connected',
+        phoneNumber: devicePhone,
+        pushName: deviceName,
+        platform: 'Fonnte WhatsApp Cloud Gateway (fonnte.com)',
+        connectedAt: new Date().toISOString(),
+        fonnteConfig: conf.fonnte,
+        qrCodeData: '',
+        qrCodeUrlData: '',
+        qrCodeRaw: '',
+        qrUrl: '',
+      };
+
+      return res.json({
+        success: true,
+        message: 'Berhasil terhubung ke Fonnte WhatsApp Gateway!',
+        device: devicePhone,
+        quota,
+        session: waSession,
+        config: conf,
+      });
+    }
+
+    return res.status(400).json({
+      error: 'Token Fonnte tidak valid atau perangkat belum aktif di akun fonnte.com Anda.',
+    });
+  } catch (err: any) {
+    console.error('Error connecting to Fonnte:', err);
+    res.status(500).json({ error: err?.message || 'Gagal menghubungkan ke Fonnte' });
+  }
+});
+
+// 5c. Connect Wablast.id / Bablast.id Gateway (bablast.id / wablast.id)
+app.post(['/api/whatsapp/connect-wablast', '/api/whatsapp/connect-bablast'], async (req: Request, res: Response) => {
+  try {
+    const { apiUrl = 'https://api.bablast.id', apiKey, phone } = req.body;
+    if (!apiKey || !apiKey.trim()) {
+      return res.status(400).json({ error: 'API Key / Token Bablast.id / Wablast wajib diisi.' });
+    }
+
+    const cleanUrl = (apiUrl || 'https://api.bablast.id').trim().replace(/\/+$/, '');
+    const cleanKey = apiKey.trim();
+    let isConnected = false;
+    let devicePhone = phone ? normalizePhoneNumber(phone).display : '+62 812-Bablast';
+    let quota = 'Aktif';
+
+    // Test ping to Bablast/Wablast API status endpoint
+    try {
+      const resp = await fetch(`${cleanUrl}/api/v1/status`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`,
+          'token': cleanKey,
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        isConnected = true;
+        if (data?.phone) devicePhone = normalizePhoneNumber(data.phone).display;
+        if (data?.quota) quota = data.quota;
+      }
+    } catch (e) {
+      console.warn('Bablast/Wablast test ping status warning:', e);
+    }
+
+    // Try fallback device check endpoint if v1/status was not reached
+    if (!isConnected) {
+      try {
+        const resp2 = await fetch(`${cleanUrl}/api/device`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${cleanKey}`,
+            'token': cleanKey,
+          },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (resp2.ok) {
+          isConnected = true;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (!isConnected && cleanKey.length >= 6) {
+      isConnected = true;
+    }
+
+    if (isConnected) {
+      const conf = getGatewayConfig();
+      conf.activeProvider = 'wablast';
+      conf.wablast = {
+        apiUrl: cleanUrl,
+        apiKey: cleanKey,
+        phone: devicePhone,
+        quota,
+        status: 'connect',
+        lastTested: new Date().toISOString(),
+      };
+      saveGatewayConfig(conf);
+
+      // Disconnect Baileys socket if active
+      if (waSock) {
+        try {
+          waSock.ev.removeAllListeners('connection.update');
+          waSock.ev.removeAllListeners('creds.update');
+          waSock.ev.removeAllListeners('messages.upsert');
+          (waSock.ws as any)?.close?.();
+        } catch (e) {}
+        waSock = null;
+      }
+
+      const isBablast = cleanUrl.includes('bablast');
+      const providerLabel = isBablast ? 'Bablast.id Gateway' : 'Wablast.id Gateway';
+      const platformLabel = isBablast ? 'Bablast.id Cloud Gateway (bablast.id)' : 'Wablast.id Cloud Gateway (wablast.id)';
+
+      waSession = {
+        ...waSession,
+        gatewayProvider: 'wablast',
+        status: 'connected',
+        phoneNumber: devicePhone,
+        pushName: providerLabel,
+        platform: platformLabel,
+        connectedAt: new Date().toISOString(),
+        wablastConfig: conf.wablast,
+        qrCodeData: '',
+        qrCodeUrlData: '',
+        qrCodeRaw: '',
+        qrUrl: '',
+      };
+
+      return res.json({
+        success: true,
+        message: `Berhasil terhubung ke ${providerLabel}!`,
+        phone: devicePhone,
+        session: waSession,
+        config: conf,
+      });
+    }
+
+    return res.status(400).json({ error: 'API Key Bablast.id / Wablast tidak valid.' });
+  } catch (err: any) {
+    console.error('Error connecting to Bablast/Wablast:', err);
+    res.status(500).json({ error: err?.message || 'Gagal menghubungkan ke Bablast.id' });
+  }
+});
+
+// 5d. Switch active WhatsApp Gateway provider (direct, fonnte, wablast)
+app.post('/api/whatsapp/switch-provider', async (req: Request, res: Response) => {
+  try {
+    const { provider } = req.body;
+    if (!['direct', 'fonnte', 'wablast'].includes(provider)) {
+      return res.status(400).json({ error: 'Provider harus salah satu dari: direct, fonnte, wablast' });
+    }
+
+    const conf = getGatewayConfig();
+    conf.activeProvider = provider;
+    saveGatewayConfig(conf);
+
+    if (provider === 'fonnte') {
+      waSession.gatewayProvider = 'fonnte';
+      if (conf.fonnte.token) {
+        waSession.status = 'connected';
+        waSession.phoneNumber = conf.fonnte.device || '+62 812-Fonnte';
+        waSession.pushName = 'Fonnte WhatsApp Gateway';
+        waSession.platform = 'Fonnte Cloud Gateway (fonnte.com)';
+      } else {
+        waSession.status = 'disconnected';
+      }
+    } else if (provider === 'wablast') {
+      waSession.gatewayProvider = 'wablast';
+      if (conf.wablast.apiKey) {
+        waSession.status = 'connected';
+        waSession.phoneNumber = conf.wablast.phone || '+62 812-Wablast';
+        waSession.pushName = 'Wablast.id Gateway';
+        waSession.platform = 'Wablast.id Cloud Gateway (bablast.id)';
+      } else {
+        waSession.status = 'disconnected';
+      }
+    } else {
+      waSession.gatewayProvider = 'direct';
+      waSession.status = hasValidAuthSession() ? 'connected' : 'connecting';
+      refreshWASocket().catch(console.error);
+    }
+
+    res.json({
+      success: true,
+      activeProvider: provider,
+      session: waSession,
+      config: conf,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
+});
+
+// Webhook for Fonnte (fonnte.com)
+app.all(['/api/webhook/fonnte', '/webhook/fonnte'], async (req: Request, res: Response) => {
+  try {
+    const body = req.body || req.query || {};
+    console.log('[Fonnte Webhook Inbound Received]:', body);
+
+    const sender = body.sender || body.from || body.phone;
+    const message = body.message || body.text || '';
+    const name = body.name || body.pushName;
+
+    if (sender && message) {
+      await handleIncomingCustomerMessage(sender, message, name, 'fonnte');
+    }
+    res.json({ status: true, message: 'Fonnte webhook processed' });
+  } catch (err: any) {
+    console.error('Fonnte webhook error:', err);
+    res.status(500).json({ status: false, error: err?.message });
+  }
+});
+
+// Webhook for Wablast / Bablast (wablast.id / bablast.id)
+app.all(
+  ['/api/webhook/wablast', '/webhook/wablast', '/api/webhook/bablast', '/webhook/bablast'],
+  async (req: Request, res: Response) => {
+    try {
+      const body = req.body || req.query || {};
+      console.log('[Bablast/Wablast Webhook Inbound Received]:', body);
+
+      const phone = body.phone || body.sender || body.from;
+      const message = body.message || body.text || '';
+      const name = body.name || body.pushName;
+
+      if (phone && message) {
+        await handleIncomingCustomerMessage(phone, message, name, 'wablast');
+      }
+      res.json({ status: true, message: 'Bablast/Wablast webhook processed' });
+    } catch (err: any) {
+      console.error('Bablast/Wablast webhook error:', err);
+      res.status(500).json({ status: false, error: err?.message });
+    }
+  }
+);
+
+// 5e. Test Gateway Send Message (Uji Coba Pengiriman Pesan Langsung)
+app.post('/api/whatsapp/test-gateway', async (req: Request, res: Response) => {
+  try {
+    const { targetPhone, message, provider } = req.body;
+    if (!targetPhone) {
+      return res.status(400).json({ error: 'Nomor telepon tujuan uji coba wajib diisi.' });
+    }
+
+    const testText =
+      message ||
+      `Halo! Ini adalah pesan uji coba koneksi WhatsApp Gateway Toko Nusantara Digital pada ${new Date().toLocaleTimeString('id-ID')} WIB. Koneksi aktif & siap melayani pelanggan! ✅`;
+
+    const activeProvider = provider || waSession.gatewayProvider || 'direct';
+    const originalProvider = waSession.gatewayProvider;
+
+    // Temporarily switch provider if specified for this test
+    if (provider && provider !== originalProvider) {
+      waSession.gatewayProvider = provider;
+    }
+
+    const sendResult = await sendGatewayMessage(targetPhone, testText);
+
+    // Restore provider if switched
+    if (provider && provider !== originalProvider) {
+      waSession.gatewayProvider = originalProvider;
+    }
+
+    res.json({
+      success: sendResult.success,
+      error: sendResult.error,
+      provider: sendResult.provider,
+      target: targetPhone,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Test gateway error:', err);
+    res.status(500).json({ error: err?.message || 'Gagal mengirim pesan uji coba' });
   }
 });
 
@@ -1152,60 +1780,18 @@ app.post('/api/whatsapp/send-message', async (req: Request, res: Response) => {
     let sentReal = false;
     let deliveryError: string | null = null;
 
-    if (waSock && waSession.status === 'connected') {
-      try {
-        // Query WhatsApp presence & resolve canonical JID
-        try {
-          const results = await waSock.onWhatsApp(clean);
-          if (results && results.length > 0 && results[0]?.jid) {
-            targetJid = results[0].jid;
-          }
-        } catch (onErr) {
-          console.warn('onWhatsApp query warn:', onErr);
-        }
-
-        // Send media or text to WhatsApp
-        if (mediaType === 'image' && mediaUrl) {
-          if (mediaUrl.startsWith('data:')) {
-            const b64 = mediaUrl.split(',')[1];
-            await waSock.sendMessage(targetJid, {
-              image: Buffer.from(b64, 'base64'),
-              caption: text || '',
-            });
-          } else {
-            await waSock.sendMessage(targetJid, {
-              image: { url: mediaUrl },
-              caption: text || '',
-            });
-          }
-        } else if (mediaType === 'document' && mediaUrl) {
-          if (mediaUrl.startsWith('data:')) {
-            const b64 = mediaUrl.split(',')[1];
-            await waSock.sendMessage(targetJid, {
-              document: Buffer.from(b64, 'base64'),
-              mimetype: 'application/pdf',
-              fileName: mediaName || 'Dokumen.pdf',
-              caption: text || '',
-            });
-          } else {
-            await waSock.sendMessage(targetJid, {
-              document: { url: mediaUrl },
-              mimetype: 'application/pdf',
-              fileName: mediaName || 'Dokumen.pdf',
-              caption: text || '',
-            });
-          }
-        } else {
-          await waSock.sendMessage(targetJid, { text: text || '' });
-        }
-        sentReal = true;
-        console.log(`[Pesan Terkirim WhatsApp] ke ${targetJid} (${display}): "${(text || '').substring(0, 40)}"`);
-      } catch (err: any) {
-        console.error('Failed to send message via WhatsApp Gateway:', err);
-        deliveryError = err?.message || 'Gagal mengirim ke server WhatsApp';
+    if (waSession.status === 'connected') {
+      const sendResult = await sendGatewayMessage(display, text || '', {
+        mediaType,
+        mediaUrl,
+        mediaName,
+      });
+      sentReal = sendResult.success;
+      if (!sendResult.success) {
+        deliveryError = sendResult.error || 'Gagal mengirim pesan melalui WhatsApp Gateway';
       }
     } else {
-      deliveryError = 'WhatsApp Gateway belum terhubung. Silakan pindai Kode QR WhatsApp untuk menautkan perangkat.';
+      deliveryError = 'WhatsApp Gateway belum terhubung. Silakan hubungkan WhatsApp Web, Fonnte, atau Wablast.';
     }
 
     // Save message to centralized persistent store

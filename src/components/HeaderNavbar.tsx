@@ -16,6 +16,7 @@ interface HeaderNavbarProps {
   activeTab: 'inbox' | 'scheduled' | 'knowledge' | 'analytics';
   onTabChange: (tab: 'inbox' | 'scheduled' | 'knowledge' | 'analytics') => void;
   waStatus: 'connected' | 'disconnected' | 'qr_ready' | 'authenticating';
+  gatewayProvider?: 'direct' | 'fonnte' | 'wablast';
   phoneNumber?: string;
   isAutoReplyActive: boolean;
   onToggleAutoReply: () => void;
@@ -28,6 +29,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
   activeTab,
   onTabChange,
   waStatus,
+  gatewayProvider = 'direct',
   phoneNumber,
   isAutoReplyActive,
   onToggleAutoReply,
@@ -64,23 +66,33 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
           {/* WhatsApp Connection Status Badge Button */}
           <button
             onClick={onOpenPairingModal}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors border ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors border cursor-pointer ${
               waStatus === 'connected'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-2xs'
+                : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 shadow-2xs'
             }`}
-            title="Klik untuk melihat status koneksi perangkat atau scan QR"
+            title="Klik untuk menghubungkan WhatsApp Gateway (Fonnte, Bablast.id, atau WhatsApp Web)"
           >
             {waStatus === 'connected' ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span className="hidden sm:inline">WA Terhubung:</span>
-                <span className="font-mono text-[11px]">{phoneNumber || '+62 812-9876-5432'}</span>
+                <span className="font-bold text-[11px] text-emerald-950">
+                  {gatewayProvider === 'fonnte'
+                    ? 'Fonnte'
+                    : gatewayProvider === 'wablast'
+                    ? 'Bablast.id'
+                    : 'WA Web'}
+                  :
+                </span>
+                <span className="font-mono text-[11px] text-emerald-800">{phoneNumber || '+62 812-9876-5432'}</span>
               </>
             ) : (
               <>
-                <QrCode className="w-3.5 h-3.5 text-amber-600" />
-                <span>Pindai QR WhatsApp</span>
+                <QrCode className="w-3.5 h-3.5 text-amber-700" />
+                <span>Hubungkan WhatsApp Gateway</span>
+                <span className="hidden xl:inline text-[10px] text-amber-800 bg-amber-200/60 px-1.5 py-0.5 rounded font-medium">
+                  Fonnte / Bablast / Web
+                </span>
               </>
             )}
           </button>

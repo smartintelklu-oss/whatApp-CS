@@ -25,6 +25,7 @@ export default function App() {
   // WhatsApp connection state
   const [waStatus, setWaStatus] = useState<'connected' | 'disconnected' | 'qr_ready' | 'authenticating'>('qr_ready');
   const [waPhone, setWaPhone] = useState<string>('+62 812-9876-5432');
+  const [gatewayProvider, setGatewayProvider] = useState<'direct' | 'fonnte' | 'wablast'>('direct');
   const [connectedAt, setConnectedAt] = useState<string>(new Date().toISOString());
 
   // Sync contacts, messages, and WhatsApp status with central server (Shared across all devices)
@@ -74,6 +75,11 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setWaStatus(data.session.status);
+          if (data.session.gatewayProvider) {
+            setGatewayProvider(data.session.gatewayProvider);
+          } else if (data.gatewayProvider) {
+            setGatewayProvider(data.gatewayProvider);
+          }
           if (data.session.phoneNumber) setWaPhone(data.session.phoneNumber);
           if (data.session.connectedAt) setConnectedAt(data.session.connectedAt);
         }
@@ -496,6 +502,7 @@ export default function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         waStatus={waStatus}
+        gatewayProvider={gatewayProvider}
         phoneNumber={waPhone}
         isAutoReplyActive={botSettings.isAutoReplyActive}
         onToggleAutoReply={handleToggleAutoReply}
@@ -554,6 +561,7 @@ export default function App() {
         isOpen={isPairingModalOpen}
         onClose={() => setIsPairingModalOpen(false)}
         status={waStatus}
+        gatewayProvider={gatewayProvider}
         phoneNumber={waPhone}
         connectedAt={connectedAt}
         onPairSuccess={handlePairSuccess}

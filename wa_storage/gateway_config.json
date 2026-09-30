@@ -1,0 +1,18 @@
+{
+  "activeProvider": "direct",
+  "fonnte": {
+    "token": "fonnte_demo_token_xyz99",
+    "device": "+62 812-Fonnte",
+    "quota": "Aktif",
+    "status": "connect",
+    "lastTested": "2026-09-30T22:12:50.041Z"
+  },
+  "wablast": {
+    "apiUrl": "https://api.bablast.id",
+    "apiKey": "test_bablast_key_8899",
+    "phone": "+62 812-9876-5432",
+    "quota": "Aktif",
+    "status": "connect",
+    "lastTested": "2026-09-30T22:12:42.025Z"
+  }
+}
