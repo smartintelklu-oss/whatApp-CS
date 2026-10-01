@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "uuid": "314fa22e-b97b-4756-b2df-4c4560a0a10b",
+  "publicUrl": "https://webhook.site/314fa22e-b97b-4756-b2df-4c4560a0a10b",
+  "createdAt": "2026-10-01T22:37:53.518Z",
+  "totalPolledRequests": 0,
+  "autoPollIntervalSec": 2.5,
+  "lastPolledAt": "2026-10-01T22:38:01.022Z",
+  "lastSuccessAt": "2026-10-01T22:38:01.482Z"
+}

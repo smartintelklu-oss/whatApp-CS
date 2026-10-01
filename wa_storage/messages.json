@@ -66,6 +66,173 @@
       "timestamp": "06.26",
       "status": "sent",
       "mediaType": "none"
+    },
+    {
+      "id": "msg_1790893162050_yjfcu",
+      "contactId": "cust_1790747874984",
+      "sender": "customer",
+      "senderName": "Hendra Saputra",
+      "text": "Halo CS, apakah barang bergaransi resmi?",
+      "timestamp": "22.19",
+      "status": "read"
+    },
+    {
+      "id": "reply_1790893167252",
+      "contactId": "cust_1790747874984",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Halo Kak! Terima kasih sudah menghubungi *Toko Nusantara Digital* 😊\n\nTentu saja, Kak! Semua produk yang kami jual dijamin **100% Original dan Bergaransi Resmi**. \n\nBerikut keuntungan jaminan garansi di toko kami:\n✅ **Garansi Resmi:** 1 hingga 2 tahun (tergantung tipe produk) dengan dukungan service center resmi di 32 kota di Indonesia.\n✅ **Garansi Tukar Baru 7 Hari:** Jika ada cacat pabrik saat barang diterima (cukup sertakan video unboxing ya, Kak).\n\nBoleh tahu Kakak sedang tertarik dengan produk apa? Biar kami bantu infokan masa garansi spesifik dan promo terbarunya! ✨",
+      "timestamp": "22.19",
+      "status": "delivered",
+      "isAiGenerated": true,
+      "aiIntent": "auto_reply",
+      "aiConfidence": 0.98,
+      "aiReasoning": "Respons otomatis cerdas berdasarkan basis pengetahuan CS (via fonnte)."
+    },
+    {
+      "id": "msg_1790893763769_uis2o",
+      "contactId": "cust_1790747874984",
+      "sender": "customer",
+      "senderName": "Hendra Saputra",
+      "text": "Halo Kak CS! Apakah stok Smartphone Pro Max masih ada dan bisa kirim hari ini?",
+      "timestamp": "22.29",
+      "status": "read"
+    },
+    {
+      "id": "msg_1790893821899_ywuq5",
+      "contactId": "cust_1790747874984",
+      "sender": "customer",
+      "senderName": "Hendra Saputra",
+      "text": "Halo Kak CS! Apakah stok Smartphone Pro Max masih ada dan bisa kirim hari ini?",
+      "timestamp": "22.30",
+      "status": "read"
+    }
+  ],
+  "cust_1790892747503": [
+    {
+      "id": "msg_1790892747558",
+      "contactId": "cust_1790892747503",
+      "sender": "customer",
+      "senderName": "SIMASOP",
+      "text": "tes",
+      "timestamp": "22.12",
+      "status": "read",
+      "mediaType": "none"
+    },
+    {
+      "id": "msg_1790892751310",
+      "contactId": "cust_1790892747503",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Terima kasih informasinya Kak SIMASOP. Pesan Kakak sudah kami catat. Apakah ada hal lain yang bisa kami jelaskan lebih detail mengenai layanan dan produk kami?",
+      "timestamp": "22.12",
+      "status": "delivered",
+      "mediaType": "none",
+      "isAiGenerated": true,
+      "aiIntent": "general_inquiry",
+      "aiConfidence": 0.95,
+      "aiReasoning": "Sistem pengaman otomatis merespons saat jalur AI sibuk."
+    },
+    {
+      "id": "msg_1790892796387",
+      "contactId": "cust_1790892747503",
+      "sender": "customer",
+      "senderName": "SIMASOP",
+      "text": "Apakah bisa pembayaran cicilan 0% pakai kartu kredit BCA atau Mandiri? Kalau pakai QRIS limitnya berapa?",
+      "timestamp": "22.13",
+      "status": "read",
+      "mediaType": "none"
+    },
+    {
+      "id": "msg_1790892801707",
+      "contactId": "cust_1790892747503",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Halo Kak SIMASOP! Tentu bisa banget, Kak. Kami menyediakan program cicilan 0% hingga 12 bulan untuk pembayaran menggunakan Kartu Kredit, termasuk BCA dan Mandiri. Untuk pembayaran via QRIS (GoPay, OVO, ShopeePay, DANA, dll), sistem kami menerima transaksi sesuai ketentuan batas maksimal dari Bank Indonesia dan aplikasi e-wallet/bank Kakak (umumnya hingga Rp 10.000.000 per transaksi). Ada produk yang sedang ingin Kakak pesan saat ini agar bisa kami bantu hitungkan atau siapkan proses pembayarannya?",
+      "timestamp": "22.13",
+      "status": "delivered",
+      "mediaType": "none",
+      "isAiGenerated": true,
+      "aiIntent": "tanya_pembayaran",
+      "aiConfidence": 0.98,
+      "aiReasoning": "Pelanggan menanyakan ketersediaan cicilan 0% kartu kredit (BCA/Mandiri) serta limit transaksi QRIS. Jawaban mengonfirmasi fasilitas cicilan 0% hingga 12 bulan dan menjelaskan aturan umum batas limit QRIS secara ramah dan solutif."
+    }
+  ],
+  "cust_1790893119744_645": [
+    {
+      "id": "msg_1790893119744_qcns5",
+      "contactId": "cust_1790893119744_645",
+      "sender": "customer",
+      "senderName": "Doni",
+      "text": "Halo apa promo hari ini?",
+      "timestamp": "22.18",
+      "status": "read"
+    }
+  ],
+  "cust_1790893122666_579": [
+    {
+      "id": "msg_1790893122666_y3sou",
+      "contactId": "cust_1790893122666_579",
+      "sender": "customer",
+      "senderName": "Rina",
+      "text": "Apakah ready stock?",
+      "timestamp": "22.18",
+      "status": "read"
+    },
+    {
+      "id": "reply_1790893129834",
+      "contactId": "cust_1790893122666_579",
+      "sender": "bot",
+      "senderName": "Asisten CS AI",
+      "text": "Halo Kak! Terima kasih sudah menghubungi *Toko Nusantara Digital* 😊\n\nSebagian besar produk unggulan kami saat ini berstatus *Ready Stock* dan siap dikirim, Kak! \n\nBoleh diinfokan Kakak sedang tertarik dengan produk yang mana? Berikut beberapa produk unggulan kami yang saat ini tersedia:\n\n📱 *Smartphone Pro Max Series* – Rp 14.500.000 *(Garansi Resmi 1 Tahun)*\n🎧 *Noise Cancelling Wireless Headphones* – Rp 2.850.000 *(Garansi 2 Tahun)*\n🔌 *Fast Charger 65W GaN* – Rp 350.000 *(Multiport USB-C)*\n⌚ *Smart Watch Fitness Edition* – Rp 1.950.000 *(Tahan Air 50m)*\n\n✨ *Keuntungan Belanja Hari Ini:*\n* *Gratis Ongkir* ke seluruh Indonesia (pembelian di atas Rp 500.000).\n* Tersedia kurir *Instant (Gosend/Grab)* untuk area Jabodetabek (order sebelum jam 15.00 WIB).\n\nSilakan beri tahu kami produk yang Kakak inginkan agar bisa langsung kami siapkan ya, Kak! Ada yang bisa kami bantu lagi?",
+      "timestamp": "22.18",
+      "status": "delivered",
+      "isAiGenerated": true,
+      "aiIntent": "auto_reply",
+      "aiConfidence": 0.98,
+      "aiReasoning": "Respons otomatis cerdas berdasarkan basis pengetahuan CS (via fonnte)."
+    }
+  ],
+  "cust_1790893129843_737": [
+    {
+      "id": "msg_1790893129843_vlm6z",
+      "contactId": "cust_1790893129843_737",
+      "sender": "customer",
+      "senderName": "User Test",
+      "text": "Tes inbound",
+      "timestamp": "22.18",
+      "status": "read"
+    }
+  ],
+  "cust_1790894289767_264": [
+    {
+      "id": "msg_1790894289768_tfgvm",
+      "contactId": "cust_1790894289767_264",
+      "sender": "customer",
+      "senderName": "Rudi Hartono",
+      "text": "Halo min, produk Smart Watch Fitness Edition ready warna apa ya?",
+      "timestamp": "22.38",
+      "status": "read"
+    },
+    {
+      "id": "msg_1790894293998_o6gcj",
+      "contactId": "cust_1790894289767_264",
+      "sender": "customer",
+      "senderName": "Rudi Hartono",
+      "text": "Halo min, produk Smart Watch Fitness Edition ready warna apa ya?",
+      "timestamp": "22.38",
+      "status": "read"
+    }
+  ],
+  "cust_1790894301650_610": [
+    {
+      "id": "msg_1790894301650_5wbsp",
+      "contactId": "cust_1790894301650_610",
+      "sender": "customer",
+      "senderName": "Siti Aisyah",
+      "text": "Halo, apakah ada promo diskon?",
+      "timestamp": "22.38",
+      "status": "read"
     }
   ]
 }

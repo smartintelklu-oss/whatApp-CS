@@ -25,6 +25,8 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+app.use(express.text({ type: ['text/*', 'application/octet-stream'], limit: '15mb' }));
 
 // Initialize Gemini Client
 const apiKey = process.env.GEMINI_API_KEY;
@@ -173,9 +175,35 @@ if (!fs.existsSync(STORAGE_DIR)) {
 const CONTACTS_FILE = path.join(STORAGE_DIR, 'contacts.json');
 const MESSAGES_FILE = path.join(STORAGE_DIR, 'messages.json');
 
+// Clean and sanitize Fonnte tokens (strip zero-width spaces, Bearer, quotes, headers, newlines)
+function cleanFonnteToken(raw: string): string {
+  if (!raw) return '';
+  let token = String(raw)
+    // Remove zero-width spaces, non-breaking spaces, BOM, and direction marks
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202A-\u202E]/g, '')
+    .trim();
+
+  // Strip code syntax like `$token = "xyz";` or `const token = 'xyz'`
+  token = token.replace(/^(?:const|let|var|\$)?\s*(?:token|apiKey|authorization|fonnteToken)?\s*[:=]\s*/i, '');
+
+  // Strip HTTP header prefixes like `Authorization:`, `Bearer `, `Token:`, `apikey:`
+  token = token.replace(/^(?:authorization|auth|apikey|api_key|token|bearer)\s*[:=\s]+/i, '');
+  token = token.replace(/^bearer\s+/i, '');
+
+  // Strip wrapping quotes and trailing semicolon or trailing comma
+  token = token.replace(/^["'`]|["'`]$/g, '').replace(/[;,\s]+$/g, '').trim();
+
+  // Remove newline, carriage returns, tabs
+  token = token.replace(/[\r\n\t]/g, '');
+
+  return token.trim();
+}
+
 // Normalize phone numbers (Indonesian & International formats)
 function normalizePhoneNumber(rawPhone: string): { clean: string; jid: string; display: string } {
-  let digits = rawPhone.replace(/[^0-9]/g, '');
+  // First extract clean base number before '@' or ':' (crucial for WhatsApp Multi-Device JIDs like 6281234:2@s.whatsapp.net)
+  let base = (rawPhone || '').split('@')[0].split(':')[0];
+  let digits = base.replace(/[^0-9]/g, '');
   if (digits.startsWith('0')) {
     digits = '62' + digits.slice(1);
   } else if (digits.startsWith('8')) {
@@ -413,41 +441,103 @@ async function sendGatewayMessage(
     mediaType?: string;
     mediaUrl?: string;
     mediaName?: string;
+    overrideProvider?: string;
+    overrideToken?: string;
+    overrideApiUrl?: string;
+    overrideApiKey?: string;
   }
 ): Promise<{ success: boolean; error?: string; provider: string; rawResponse?: any }> {
   const { clean, jid, display } = normalizePhoneNumber(targetPhone);
-  const provider = waSession.gatewayProvider || 'direct';
+  const provider = options?.overrideProvider || waSession.gatewayProvider || 'direct';
 
   // 1. Send via Fonnte (fonnte.com)
   if (provider === 'fonnte') {
     const config = getGatewayConfig();
-    const token = config.fonnte.token;
+    const token = cleanFonnteToken(options?.overrideToken || config.fonnte.token);
     if (!token) return { success: false, error: 'Token Fonnte belum dikonfigurasi', provider: 'fonnte' };
 
     try {
-      const fonntePayload: any = {
-        target: clean,
-        message: text || '',
-      };
+      const targetPhoneClean = clean.replace(/^0+/, '62');
+
+      // Method 1: Form-urlencoded (URLSearchParams), the standard supported by Fonnte PHP backend
+      const form = new URLSearchParams();
+      form.append('target', targetPhoneClean);
+      form.append('message', text || '');
+      // Setting countryCode to '0' ensures Fonnte doesn't alter target numbers that already have full country code '62...'
+      form.append('countryCode', '0');
       if (options?.mediaUrl) {
-        fonntePayload.url = options.mediaUrl;
-        if (text) fonntePayload.caption = text;
+        form.append('url', options.mediaUrl);
+        if (options?.mediaName) form.append('filename', options.mediaName);
+        if (text) form.append('caption', text);
       }
 
-      const res = await fetch('https://api.fonnte.com/send', {
+      let res = await fetch('https://api.fonnte.com/send', {
         method: 'POST',
         headers: {
           'Authorization': token,
-          'Content-Type': 'application/json',
         },
-        body: JSON.stringify(fonntePayload),
+        body: form,
       });
-      const data = await res.json();
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        // Fallback if form response is not JSON
+      }
+
+      // If form response did not succeed, retry with JSON payload
+      if (!data || data?.status !== true) {
+        try {
+          const jsonPayload: any = {
+            target: targetPhoneClean,
+            message: text || '',
+            countryCode: '0',
+          };
+          if (options?.mediaUrl) {
+            jsonPayload.url = options.mediaUrl;
+            if (options?.mediaName) jsonPayload.filename = options.mediaName;
+            if (text) jsonPayload.caption = text;
+          }
+
+          const resJson = await fetch('https://api.fonnte.com/send', {
+            method: 'POST',
+            headers: {
+              'Authorization': token,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(jsonPayload),
+          });
+          const dataJson = await resJson.json();
+          if (dataJson?.status === true) {
+            data = dataJson;
+          } else if (dataJson?.reason && !data?.reason) {
+            data = dataJson;
+          }
+        } catch (e) {}
+      }
+
       console.log(`[Fonnte Send API Response] ke ${display}:`, data);
-      const isSuccess = data?.status === true || (Array.isArray(data?.id) && data.id.length > 0);
+      const isSuccess =
+        data?.status === true ||
+        (Array.isArray(data?.id) && data.id.length > 0) ||
+        (typeof data?.id === 'string' && data.id.length > 0) ||
+        (typeof data?.process === 'string' && data.process.toLowerCase().includes('success'));
+
+      let friendlyError = data?.reason || data?.message;
+      if (friendlyError === 'invalid token' || friendlyError === 'token invalid') {
+        friendlyError =
+          'Token Fonnte ditolak server (invalid token). Pastikan token yang digunakan adalah Token Perangkat dari menu Device di https://md.fonnte.com/ (bukan Account Token profil). Pastikan akun Anda tidak memblokir IP atau token belum kadaluarsa.';
+      } else if (friendlyError === 'device disconnect') {
+        friendlyError =
+          'Perangkat WhatsApp di Fonnte sedang DISCONNECT. Silakan buka https://md.fonnte.com/ > menu Device, lalu klik Scan QR untuk menghubungkan nomor WhatsApp Anda.';
+      } else if (friendlyError === 'out of quota' || friendlyError === 'insufficient balance') {
+        friendlyError = 'Kuota pengiriman pesan di akun Fonnte Anda habis. Silakan periksa paket kuota di fonnte.com.';
+      }
+
       return {
         success: isSuccess,
-        error: isSuccess ? undefined : (data?.reason || data?.message || 'Gagal mengirim pesan via Fonnte'),
+        error: isSuccess ? undefined : (friendlyError || 'Gagal mengirim pesan via Fonnte'),
         provider: 'fonnte',
         rawResponse: data,
       };
@@ -460,7 +550,8 @@ async function sendGatewayMessage(
   // 2. Send via Wablast (wablast.id / bablast.id)
   if (provider === 'wablast') {
     const config = getGatewayConfig();
-    const { apiUrl = 'https://api.wablast.id', apiKey } = config.wablast;
+    const apiUrl = options?.overrideApiUrl || config.wablast.apiUrl || 'https://api.wablast.id';
+    const apiKey = options?.overrideApiKey || config.wablast.apiKey;
     if (!apiKey) return { success: false, error: 'API Key Wablast belum dikonfigurasi', provider: 'wablast' };
 
     try {
@@ -575,7 +666,9 @@ async function handleIncomingCustomerMessage(
   let contactsList = getStoredContacts();
   let contact = contactsList.find((c) => {
     const cClean = c.phone.replace(/[^0-9]/g, '');
-    return cClean === clean || cClean.endsWith(clean) || clean.endsWith(cClean);
+    const cleanLast9 = clean.slice(-9);
+    const cCleanLast9 = cClean.slice(-9);
+    return cClean === clean || (cleanLast9.length >= 8 && cleanLast9 === cCleanLast9);
   });
 
   if (!contact) {
@@ -617,12 +710,13 @@ async function handleIncomingCustomerMessage(
   messagesMap[contact.id] = [...contactMsgs, incomingMsgObj];
   saveStoredMessages(messagesMap);
 
-  // 3. If auto-reply is active, trigger smart reply via Gemini 3.8 Flash
+  // 3. If auto-reply is active, trigger smart reply via Gemini 3.8 Flash asynchronously (non-blocking)
   if (waSession.isAutoReplyActive && contact.isAiAutoReplyEnabled) {
-    try {
-      let smartReply = '';
-      if (ai) {
-        const systemInstruction = `
+    (async () => {
+      try {
+        let smartReply = '';
+        if (ai) {
+          const systemInstruction = `
 Anda adalah Asisten Virtual Customer Service WhatsApp Resmi untuk "Toko Nusantara Digital".
 Tugas Anda adalah membalas pesan pelanggan secara otomatis dengan balasan pintar (Smart Auto-Reply), cepat, ramah, solutif, dan menggunakan bahasa Indonesia yang sopan.
 
@@ -631,43 +725,44 @@ ${knowledgeBase}
 
 Balas pesan dengan format WhatsApp yang rapi (gunakan *kata tebal* atau poin emoji). Jangan mengarang info di luar basis pengetahuan.
 `;
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: text || 'Halo',
-          config: { systemInstruction },
-        });
-        smartReply = response.text?.trim() || '';
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: text || 'Halo',
+            config: { systemInstruction },
+          });
+          smartReply = response.text?.trim() || '';
+        }
+
+        if (!smartReply) {
+          const fb = generateFallbackSmartReply(text || 'Halo', contact.name, 'ramah_sopan');
+          smartReply = fb.reply;
+        }
+
+        // Send real message back to customer on WhatsApp via the active provider
+        await sendGatewayMessage(display, smartReply);
+        console.log(`Auto-reply terkirim ke ${display} via ${providerName.toUpperCase()}: "${smartReply.substring(0, 40)}..."`);
+
+        // Store reply in centralized messages storage
+        const replyMsgObj = {
+          id: 'reply_' + Date.now(),
+          contactId: contact.id,
+          sender: 'bot',
+          senderName: 'Asisten CS AI',
+          text: smartReply,
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          status: 'delivered',
+          isAiGenerated: true,
+          aiIntent: 'auto_reply',
+          aiConfidence: 0.98,
+          aiReasoning: `Respons otomatis cerdas berdasarkan basis pengetahuan CS (via ${providerName}).`,
+        };
+        const updatedMap = getStoredMessages();
+        updatedMap[contact.id] = [...(updatedMap[contact.id] || []), replyMsgObj];
+        saveStoredMessages(updatedMap);
+      } catch (autoErr) {
+        console.error('Error generating/sending auto-reply:', autoErr);
       }
-
-      if (!smartReply) {
-        const fb = generateFallbackSmartReply(text || 'Halo', contact.name, 'ramah_sopan');
-        smartReply = fb.reply;
-      }
-
-      // Send real message back to customer on WhatsApp via the active provider
-      await sendGatewayMessage(display, smartReply);
-      console.log(`Auto-reply terkirim ke ${display} via ${providerName.toUpperCase()}: "${smartReply.substring(0, 40)}..."`);
-
-      // Store reply in centralized messages storage
-      const replyMsgObj = {
-        id: 'reply_' + Date.now(),
-        contactId: contact.id,
-        sender: 'bot',
-        senderName: 'Asisten CS AI',
-        text: smartReply,
-        timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-        status: 'delivered',
-        isAiGenerated: true,
-        aiIntent: 'auto_reply',
-        aiConfidence: 0.98,
-        aiReasoning: `Respons otomatis cerdas berdasarkan basis pengetahuan CS (via ${providerName}).`,
-      };
-      const updatedMap = getStoredMessages();
-      updatedMap[contact.id] = [...(updatedMap[contact.id] || []), replyMsgObj];
-      saveStoredMessages(updatedMap);
-    } catch (autoErr) {
-      console.error('Error generating/sending auto-reply:', autoErr);
-    }
+    })().catch(console.error);
   }
 }
 
@@ -866,20 +961,30 @@ async function startWASocket(): Promise<void> {
       if (type !== 'notify') return;
 
       for (const msg of newMessages) {
-        // Skip messages from self or empty status broadcasts
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') continue;
-
+        // Skip messages from self or empty status broadcasts or groups
+        if (!msg.message || msg.key.fromMe) continue;
         const remoteJid = msg.key.remoteJid;
-        if (!remoteJid) continue;
+        if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@g.us')) continue;
 
-        const rawNum = remoteJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
+        const rawNum = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+        if (!rawNum) continue;
+
         const senderName = msg.pushName || undefined;
 
         const text =
           msg.message?.conversation ||
           msg.message?.extendedTextMessage?.text ||
           msg.message?.imageMessage?.caption ||
-          '';
+          msg.message?.videoMessage?.caption ||
+          msg.message?.documentMessage?.caption ||
+          (msg.message as any)?.buttonsResponseMessage?.selectedDisplayText ||
+          (msg.message as any)?.templateButtonReplyMessage?.selectedDisplayText ||
+          (msg.message as any)?.listResponseMessage?.title ||
+          (msg.message?.imageMessage ? '[Foto/Gambar]' : '') ||
+          (msg.message?.videoMessage ? '[Video]' : '') ||
+          (msg.message?.audioMessage ? '[Pesan Suara / Audio]' : '') ||
+          (msg.message?.documentMessage ? '[Dokumen]' : '') ||
+          'Pesan WhatsApp Masuk';
 
         await handleIncomingCustomerMessage(rawNum, text, senderName, 'direct');
       }
@@ -1178,29 +1283,41 @@ app.get('/api/whatsapp/gateway-config', (_req: Request, res: Response) => {
 // 5b. Connect Fonnte Gateway (fonnte.com)
 app.post('/api/whatsapp/connect-fonnte', async (req: Request, res: Response) => {
   try {
-    const { token } = req.body;
+    const { token, force = false } = req.body;
     if (!token || !token.trim()) {
       return res.status(400).json({ error: 'Token API Fonnte wajib diisi.' });
     }
 
-    const cleanToken = token.trim();
+    const cleanToken = cleanFonnteToken(token);
+    if (!cleanToken) {
+      return res.status(400).json({ error: 'Format Token API Fonnte tidak valid setelah pembersihan.' });
+    }
+
     let isConnected = false;
+    let actualTokenToSave = cleanToken;
     let deviceName = 'Fonnte Device';
     let devicePhone = '+62 812-Fonnte';
     let quota: any = 'Aktif';
+    let deviceStatus = 'unknown';
+    let diagnosticMessage = '';
+    let fonnteApiReason = '';
+    let rawApiResponse: any = null;
 
+    // 1. Check as Device Token via /device
     try {
       const resp = await fetch('https://api.fonnte.com/device', {
         method: 'POST',
         headers: {
           'Authorization': cleanToken,
         },
-        signal: AbortSignal.timeout(8000),
+        body: new URLSearchParams({ token: cleanToken }),
+        signal: AbortSignal.timeout(10000),
       });
-      const data = await resp.json();
-      console.log('[Fonnte Device Test Result]:', data);
+      const data = await resp.json().catch(() => null);
+      rawApiResponse = data;
+      console.log('[Fonnte /device Response]:', data);
 
-      if (data?.status === true || data?.device) {
+      if (data?.status === true) {
         isConnected = true;
         if (data.device) {
           const { display } = normalizePhoneNumber(data.device);
@@ -1208,26 +1325,93 @@ app.post('/api/whatsapp/connect-fonnte', async (req: Request, res: Response) => 
         }
         if (data.name) deviceName = data.name;
         if (data.quota || data.messages) quota = data.quota || data.messages;
+        deviceStatus = data.device_status || 'connect';
+        diagnosticMessage = `Perangkat Fonnte "${deviceName}" (${devicePhone}) terverifikasi online dan siap digunakan.`;
+      } else if (
+        data?.device ||
+        data?.name ||
+        data?.device_status ||
+        (data?.reason &&
+          !data.reason.toLowerCase().includes('token invalid') &&
+          !data.reason.toLowerCase().includes('unknown user'))
+      ) {
+        // Token IS recognized by Fonnte! (Could be device disconnect, offline, pending scan, etc.)
+        isConnected = true;
+        if (data.device) {
+          const { display } = normalizePhoneNumber(data.device);
+          devicePhone = display;
+        }
+        if (data.name) deviceName = data.name;
+        if (data.quota || data.messages) quota = data.quota || data.messages;
+        deviceStatus = data.device_status || (data.reason?.toLowerCase().includes('disconnect') ? 'disconnect' : 'connect');
+        diagnosticMessage = `Token Fonnte valid untuk perangkat "${deviceName}" (${devicePhone}). Status di Fonnte: ${deviceStatus.toUpperCase()}.${
+          deviceStatus === 'disconnect'
+            ? ' Perangkat WhatsApp di Fonnte berstatus DISCONNECT. Pastikan untuk scan QR di https://md.fonnte.com/ jika ingin mengirim/menerima pesan.'
+            : ''
+        }`;
+      } else if (data?.reason) {
+        fonnteApiReason = data.reason;
       }
     } catch (testErr: any) {
-      console.warn('Fonnte device check warning:', testErr?.message);
+      console.warn('Fonnte /device check warning:', testErr?.message);
     }
 
-    if (!isConnected && cleanToken.length >= 8) {
+    // 2. If /device failed, check if the token is an Account Token via /get-devices
+    if (!isConnected) {
+      try {
+        const respDevices = await fetch('https://api.fonnte.com/get-devices', {
+          method: 'POST',
+          headers: {
+            'Authorization': cleanToken,
+          },
+          body: new URLSearchParams({ dummy: '1' }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const devData = await respDevices.json().catch(() => null);
+        console.log('[Fonnte /get-devices Response]:', devData);
+
+        if (devData?.status === true && Array.isArray(devData?.data) && devData.data.length > 0) {
+          // Token is an Account Token! Find active device or first device
+          const targetDev = devData.data.find((d: any) => d.status === 'connect') || devData.data[0];
+          if (targetDev && targetDev.token) {
+            isConnected = true;
+            actualTokenToSave = cleanFonnteToken(targetDev.token);
+            if (targetDev.device) {
+              const { display } = normalizePhoneNumber(targetDev.device);
+              devicePhone = display;
+            }
+            if (targetDev.name) deviceName = targetDev.name;
+            if (targetDev.quota) quota = targetDev.quota;
+            deviceStatus = targetDev.status || 'connect';
+            diagnosticMessage = `Token Akun Fonnte terverifikasi! Sistem otomatis menggunakan Token Perangkat untuk "${deviceName}" (${devicePhone}).`;
+          }
+        } else if (devData?.reason && !fonnteApiReason) {
+          fonnteApiReason = devData.reason;
+        }
+      } catch (err: any) {
+        console.warn('Fonnte /get-devices check warning:', err?.message);
+      }
+    }
+
+    // 3. If force is requested by user, allow manual connection regardless of Fonnte API check
+    if (!isConnected && (force === true || force === 'true') && cleanToken.length >= 4) {
       isConnected = true;
+      diagnosticMessage =
+        'Token Fonnte disimpan (Bypass Verifikasi). Pastikan perangkat aktif dan scan QR WhatsApp di https://md.fonnte.com/.';
       devicePhone = '+62 812-Fonnte';
       deviceName = 'Fonnte WhatsApp';
       quota = 'Aktif';
+      deviceStatus = 'connect';
     }
 
     if (isConnected) {
       const conf = getGatewayConfig();
       conf.activeProvider = 'fonnte';
       conf.fonnte = {
-        token: cleanToken,
+        token: actualTokenToSave,
         device: devicePhone,
         quota,
-        status: 'connect',
+        status: deviceStatus === 'disconnect' ? 'disconnect' : 'connect',
         lastTested: new Date().toISOString(),
       };
       saveGatewayConfig(conf);
@@ -1260,20 +1444,91 @@ app.post('/api/whatsapp/connect-fonnte', async (req: Request, res: Response) => 
 
       return res.json({
         success: true,
-        message: 'Berhasil terhubung ke Fonnte WhatsApp Gateway!',
+        message: diagnosticMessage || 'Berhasil terhubung ke Fonnte WhatsApp Gateway!',
         device: devicePhone,
+        deviceName,
         quota,
+        deviceStatus,
+        tokenUsed: actualTokenToSave,
         session: waSession,
         config: conf,
       });
     }
 
+    // Friendly error response with clear guidance
+    let errorDetail = 'Server Fonnte mengembalikan status tidak valid.';
+    if (fonnteApiReason === 'token invalid' || fonnteApiReason === 'invalid token') {
+      errorDetail =
+        'Server Fonnte menyatakan token tidak valid (token invalid). Pastikan menyalin Token Perangkat dari menu Device di https://md.fonnte.com/ (bukan Account Token atau ID).';
+    } else if (fonnteApiReason === 'unknown user') {
+      errorDetail = 'Token tidak ditemukan di sistem Fonnte.';
+    }
+
     return res.status(400).json({
-      error: 'Token Fonnte tidak valid atau perangkat belum aktif di akun fonnte.com Anda.',
+      error: `Token Fonnte ditolak oleh server fonnte.com (${fonnteApiReason || 'invalid'}).`,
+      details: errorDetail,
+      fonnteReason: fonnteApiReason || 'invalid token',
+      rawResponse: rawApiResponse,
+      canForceConnect: true,
+      cleanedTokenPreview: cleanToken.length > 8 ? `${cleanToken.slice(0, 4)}...${cleanToken.slice(-4)}` : cleanToken,
     });
   } catch (err: any) {
     console.error('Error connecting to Fonnte:', err);
     res.status(500).json({ error: err?.message || 'Gagal menghubungkan ke Fonnte' });
+  }
+});
+
+// 5b-2. Fonnte Real-Time Diagnostics
+app.get('/api/whatsapp/fonnte-diagnostics', async (_req: Request, res: Response) => {
+  try {
+    const config = getGatewayConfig();
+    const token = cleanFonnteToken(config.fonnte.token);
+    if (!token) {
+      return res.json({
+        configured: false,
+        message: 'Belum ada token Fonnte yang tersimpan.',
+      });
+    }
+
+    let deviceResult: any = null;
+    let getDevicesResult: any = null;
+
+    try {
+      const resp = await fetch('https://api.fonnte.com/device', {
+        method: 'POST',
+        headers: { 'Authorization': token },
+        signal: AbortSignal.timeout(6000),
+      });
+      deviceResult = await resp.json();
+    } catch (e: any) {
+      deviceResult = { error: e.message };
+    }
+
+    try {
+      const resp2 = await fetch('https://api.fonnte.com/get-devices', {
+        method: 'POST',
+        headers: {
+          'Authorization': token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(6000),
+      });
+      getDevicesResult = await resp2.json();
+    } catch (e: any) {
+      getDevicesResult = { error: e.message };
+    }
+
+    res.json({
+      configured: true,
+      tokenMasked: token.slice(0, 4) + '...' + token.slice(-4),
+      deviceEndpoint: deviceResult,
+      getDevicesEndpoint: getDevicesResult,
+      activeProvider: waSession.gatewayProvider,
+      sessionStatus: waSession.status,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
   }
 });
 
@@ -1442,42 +1697,369 @@ app.post('/api/whatsapp/switch-provider', async (req: Request, res: Response) =>
   }
 });
 
-// Webhook for Fonnte (fonnte.com)
+// Webhook Inbound Statistics & Live Diagnostics
+interface WebhookInboundLog {
+  id: string;
+  provider: string;
+  sender: string;
+  message: string;
+  name?: string;
+  receivedAt: string;
+}
+
+interface WebhookRelayConfig {
+  enabled: boolean;
+  uuid: string;
+  publicUrl: string;
+  createdAt: string;
+  lastPolledAt?: string;
+  lastSuccessAt?: string;
+  totalPolledRequests: number;
+  lastError?: string;
+  autoPollIntervalSec: number;
+}
+
+const WEBHOOK_RELAY_FILE = path.join(STORAGE_DIR, 'webhook_relay.json');
+
+function getStoredWebhookRelay(): WebhookRelayConfig | null {
+  try {
+    if (fs.existsSync(WEBHOOK_RELAY_FILE)) {
+      return JSON.parse(fs.readFileSync(WEBHOOK_RELAY_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Error reading webhook_relay.json:', e);
+  }
+  return null;
+}
+
+function saveStoredWebhookRelay(config: WebhookRelayConfig): void {
+  try {
+    fs.writeFileSync(WEBHOOK_RELAY_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error writing webhook_relay.json:', e);
+  }
+}
+
+// Provision or get dedicated open Webhook Relay (bypasses Google Cloud Run cookie protection)
+async function provisionOrGetWebhookRelay(forceNew: boolean = false): Promise<WebhookRelayConfig> {
+  let existing = getStoredWebhookRelay();
+  if (!forceNew && existing && existing.uuid && existing.publicUrl) {
+    return existing;
+  }
+
+  try {
+    const res = await fetch('https://webhook.site/token', {
+      method: 'POST',
+      headers: { 'User-Agent': 'WhatsAppAutomator/2.0' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const newConfig: WebhookRelayConfig = {
+        enabled: true,
+        uuid: data.uuid,
+        publicUrl: `https://webhook.site/${data.uuid}`,
+        createdAt: new Date().toISOString(),
+        totalPolledRequests: 0,
+        autoPollIntervalSec: 2.5,
+      };
+      saveStoredWebhookRelay(newConfig);
+      console.log(`[Webhook Relay Initialized]: ${newConfig.publicUrl}`);
+      return newConfig;
+    }
+  } catch (err: any) {
+    console.error('Failed to create webhook.site token:', err);
+  }
+
+  const fallback: WebhookRelayConfig = existing || {
+    enabled: false,
+    uuid: '',
+    publicUrl: '',
+    createdAt: new Date().toISOString(),
+    totalPolledRequests: 0,
+    autoPollIntervalSec: 2.5,
+  };
+  return fallback;
+}
+
+let webhookStats = {
+  totalReceived: 0,
+  lastReceivedAt: null as string | null,
+  lastSender: null as string | null,
+  lastMessage: null as string | null,
+  lastProvider: null as string | null,
+  recentLogs: [] as WebhookInboundLog[],
+};
+
+let isPollingRelay = false;
+
+// Poll Webhook Relay for incoming messages from external gateways (Fonnte / Wablast)
+async function pollWebhookRelay(): Promise<{ processedCount: number; errors: string[] }> {
+  if (isPollingRelay) return { processedCount: 0, errors: [] };
+  isPollingRelay = true;
+  let processedCount = 0;
+  const errors: string[] = [];
+
+  try {
+    let config = getStoredWebhookRelay();
+    if (!config || !config.enabled || !config.uuid) {
+      config = await provisionOrGetWebhookRelay();
+      if (!config || !config.enabled || !config.uuid) {
+        isPollingRelay = false;
+        return { processedCount: 0, errors: ['Webhook relay belum aktif'] };
+      }
+    }
+
+    config.lastPolledAt = new Date().toISOString();
+
+    const fetchUrl = `https://webhook.site/token/${config.uuid}/requests?per_page=25`;
+    const res = await fetch(fetchUrl, {
+      headers: { 'User-Agent': 'WhatsAppAutomator/2.0' },
+      signal: AbortSignal.timeout(6000),
+    });
+
+    if (!res.ok) {
+      config.lastError = `HTTP ${res.status} dari webhook relay`;
+      saveStoredWebhookRelay(config);
+      isPollingRelay = false;
+      return { processedCount: 0, errors: [config.lastError] };
+    }
+
+    const data = await res.json();
+    const requests = Array.isArray(data.data) ? data.data : [];
+
+    for (const reqItem of requests) {
+      try {
+        let payload: any = reqItem.content;
+        if (typeof payload === 'string') {
+          payload = payload.trim();
+          if (payload.startsWith('{') || payload.startsWith('[')) {
+            try {
+              payload = JSON.parse(payload);
+            } catch (e1) {}
+          } else {
+            try {
+              const params = new URLSearchParams(payload);
+              const entries = Object.fromEntries(params.entries());
+              if (Object.keys(entries).length > 0) payload = entries;
+            } catch (e2) {}
+          }
+        }
+
+        // If payload is object where first key is JSON string
+        if (payload && typeof payload === 'object') {
+          const keys = Object.keys(payload);
+          if (keys.length === 1 && keys[0].trim().startsWith('{')) {
+            try {
+              payload = JSON.parse(keys[0]);
+            } catch (e3) {}
+          }
+        }
+
+        // Handle nested data wrappers e.g. { data: { sender: ... } }
+        if (payload && payload.data && typeof payload.data === 'object') {
+          payload = { ...payload, ...payload.data };
+        }
+
+        const rawSender = payload?.sender || payload?.from || payload?.phone || payload?.member;
+        const rawMessage =
+          payload?.message ||
+          payload?.text ||
+          (payload?.url ? `[Lampiran: ${payload?.filename || 'Media'}]` : '') ||
+          (payload?.location ? `[Lokasi: ${payload?.location}]` : '') ||
+          (payload?.pollname ? `[Poll: ${payload.pollname}]` : '') ||
+          'Pesan WhatsApp Masuk';
+        const rawName = payload?.name || payload?.pushName;
+
+        if (rawSender) {
+          console.log(`[Webhook Relay Inbound] dari ${rawSender}: "${rawMessage}"`);
+          webhookStats.totalReceived++;
+          webhookStats.lastReceivedAt = new Date().toISOString();
+          webhookStats.lastSender = String(rawSender);
+          webhookStats.lastMessage = String(rawMessage);
+          webhookStats.lastProvider = 'fonnte';
+          webhookStats.recentLogs.unshift({
+            id: 'wh_relay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+            provider: 'fonnte (relay)',
+            sender: String(rawSender),
+            message: String(rawMessage),
+            name: rawName ? String(rawName) : undefined,
+            receivedAt: new Date().toLocaleTimeString('id-ID'),
+          });
+          if (webhookStats.recentLogs.length > 25) webhookStats.recentLogs.pop();
+
+          await handleIncomingCustomerMessage(String(rawSender), String(rawMessage), rawName ? String(rawName) : undefined, 'fonnte');
+          processedCount++;
+        }
+
+        // Delete processed request so it won't be re-processed
+        try {
+          await fetch(`https://webhook.site/token/${config.uuid}/request/${reqItem.uuid}`, {
+            method: 'DELETE',
+            signal: AbortSignal.timeout(3000),
+          });
+        } catch (delErr) {
+          // ignore
+        }
+      } catch (itemErr: any) {
+        errors.push(itemErr?.message || 'Error processing relay message');
+      }
+    }
+
+    config.totalPolledRequests = (config.totalPolledRequests || 0) + processedCount;
+    config.lastSuccessAt = new Date().toISOString();
+    config.lastError = undefined;
+    saveStoredWebhookRelay(config);
+  } catch (err: any) {
+    errors.push(err?.message || 'Error polling webhook relay');
+  } finally {
+    isPollingRelay = false;
+  }
+
+  return { processedCount, errors };
+}
+
+// Direct Webhook for Fonnte (fonnte.com)
 app.all(['/api/webhook/fonnte', '/webhook/fonnte'], async (req: Request, res: Response) => {
   try {
-    const body = req.body || req.query || {};
-    console.log('[Fonnte Webhook Inbound Received]:', body);
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        try {
+          const params = new URLSearchParams(body);
+          body = Object.fromEntries(params.entries());
+        } catch (e2) {
+          body = {};
+        }
+      }
+    }
 
-    const sender = body.sender || body.from || body.phone;
-    const message = body.message || body.text || '';
+    // Handle case where body is object with 1 key that is a JSON string
+    if (body && typeof body === 'object') {
+      const keys = Object.keys(body);
+      if (keys.length === 1 && keys[0].trim().startsWith('{')) {
+        try {
+          body = JSON.parse(keys[0]);
+        } catch (e3) {}
+      }
+    }
+
+    if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
+      body = req.query || {};
+    }
+
+    if (body && body.data && typeof body.data === 'object') {
+      body = { ...body, ...body.data };
+    }
+
+    console.log('[Fonnte Direct Webhook Inbound Received]:', JSON.stringify(body));
+
+    const sender = body.sender || body.from || body.phone || body.member;
+    const message =
+      body.message ||
+      body.text ||
+      (body.url ? `[Lampiran Media: ${body.filename || 'File'}]` : '') ||
+      (body.location ? `[Lokasi: ${body.location}]` : '') ||
+      (body.pollname ? `[Polling: ${body.pollname}]` : '') ||
+      'Pesan WhatsApp Masuk';
     const name = body.name || body.pushName;
 
-    if (sender && message) {
-      await handleIncomingCustomerMessage(sender, message, name, 'fonnte');
+    if (sender) {
+      webhookStats.totalReceived++;
+      webhookStats.lastReceivedAt = new Date().toISOString();
+      webhookStats.lastSender = String(sender);
+      webhookStats.lastMessage = String(message);
+      webhookStats.lastProvider = 'fonnte';
+      webhookStats.recentLogs.unshift({
+        id: 'wh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+        provider: 'fonnte (direct)',
+        sender: String(sender),
+        message: String(message),
+        name: name ? String(name) : undefined,
+        receivedAt: new Date().toLocaleTimeString('id-ID'),
+      });
+      if (webhookStats.recentLogs.length > 25) webhookStats.recentLogs.pop();
+
+      await handleIncomingCustomerMessage(String(sender), String(message), name ? String(name) : undefined, 'fonnte');
+      return res.json({ status: true, message: 'Fonnte webhook processed successfully', response: 'ok' });
     }
-    res.json({ status: true, message: 'Fonnte webhook processed' });
+
+    res.json({ status: false, message: 'No sender identified in payload', receivedPayload: body });
   } catch (err: any) {
     console.error('Fonnte webhook error:', err);
     res.status(500).json({ status: false, error: err?.message });
   }
 });
 
-// Webhook for Wablast / Bablast (wablast.id / bablast.id)
+// Direct Webhook for Wablast / Bablast (wablast.id / bablast.id)
 app.all(
   ['/api/webhook/wablast', '/webhook/wablast', '/api/webhook/bablast', '/webhook/bablast'],
   async (req: Request, res: Response) => {
     try {
-      const body = req.body || req.query || {};
-      console.log('[Bablast/Wablast Webhook Inbound Received]:', body);
+      let body = req.body;
+      if (typeof body === 'string') {
+        try {
+          body = JSON.parse(body);
+        } catch (e) {
+          try {
+            const params = new URLSearchParams(body);
+            body = Object.fromEntries(params.entries());
+          } catch (e2) {
+            body = {};
+          }
+        }
+      }
+
+      if (body && typeof body === 'object') {
+        const keys = Object.keys(body);
+        if (keys.length === 1 && keys[0].trim().startsWith('{')) {
+          try {
+            body = JSON.parse(keys[0]);
+          } catch (e3) {}
+        }
+      }
+
+      if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
+        body = req.query || {};
+      }
+
+      if (body && body.data && typeof body.data === 'object') {
+        body = { ...body, ...body.data };
+      }
+
+      console.log('[Bablast/Wablast Direct Webhook Inbound Received]:', JSON.stringify(body));
 
       const phone = body.phone || body.sender || body.from;
-      const message = body.message || body.text || '';
+      const message =
+        body.message ||
+        body.text ||
+        (body.url ? `[Lampiran Media: ${body.filename || 'File'}]` : '') ||
+        'Pesan WhatsApp Masuk';
       const name = body.name || body.pushName;
 
-      if (phone && message) {
-        await handleIncomingCustomerMessage(phone, message, name, 'wablast');
+      if (phone) {
+        webhookStats.totalReceived++;
+        webhookStats.lastReceivedAt = new Date().toISOString();
+        webhookStats.lastSender = String(phone);
+        webhookStats.lastMessage = String(message);
+        webhookStats.lastProvider = 'wablast';
+        webhookStats.recentLogs.unshift({
+          id: 'wh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+          provider: 'wablast (direct)',
+          sender: String(phone),
+          message: String(message),
+          name: name ? String(name) : undefined,
+          receivedAt: new Date().toLocaleTimeString('id-ID'),
+        });
+        if (webhookStats.recentLogs.length > 25) webhookStats.recentLogs.pop();
+
+        await handleIncomingCustomerMessage(String(phone), String(message), name ? String(name) : undefined, 'wablast');
+        return res.json({ status: true, message: 'Bablast/Wablast webhook processed', response: 'ok' });
       }
-      res.json({ status: true, message: 'Bablast/Wablast webhook processed' });
+
+      res.json({ status: false, message: 'No phone identified in payload' });
     } catch (err: any) {
       console.error('Bablast/Wablast webhook error:', err);
       res.status(500).json({ status: false, error: err?.message });
@@ -1485,10 +2067,82 @@ app.all(
   }
 );
 
+// 5d. Get Webhook Diagnostics, Relay Info, & Live Stats
+app.get('/api/whatsapp/webhook-stats', async (req: Request, res: Response) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol || 'http';
+  let relayConfig = getStoredWebhookRelay();
+  if (!relayConfig || !relayConfig.uuid) {
+    relayConfig = await provisionOrGetWebhookRelay();
+  }
+
+  const directFonnteUrl = `${protocol}://${host}/api/webhook/fonnte`;
+  const recommendedWebhookUrl = relayConfig?.publicUrl || directFonnteUrl;
+
+  res.json({
+    success: true,
+    stats: webhookStats,
+    relayConfig,
+    fonnteWebhookUrl: recommendedWebhookUrl,
+    directWebhookUrl: directFonnteUrl,
+    bablastWebhookUrl: `${protocol}://${host}/api/webhook/bablast`,
+    activeProvider: waSession.gatewayProvider,
+  });
+});
+
+// 5d-1. Manual Sync / Force Poll Webhook Relay
+app.post('/api/whatsapp/webhook-relay/sync', async (_req: Request, res: Response) => {
+  try {
+    const result = await pollWebhookRelay();
+    const relayConfig = getStoredWebhookRelay();
+    res.json({
+      success: true,
+      processedCount: result.processedCount,
+      errors: result.errors,
+      relayConfig,
+      stats: webhookStats,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 5d-2. Reset / Regenerate Webhook Relay URL
+app.post('/api/whatsapp/webhook-relay/reset', async (_req: Request, res: Response) => {
+  try {
+    const newConfig = await provisionOrGetWebhookRelay(true);
+    res.json({
+      success: true,
+      message: 'URL Webhook Relay baru berhasil digenerate!',
+      relayConfig: newConfig,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 5d-3. Simulate Inbound WhatsApp Message (Testing Tool)
+app.post('/api/whatsapp/simulate-inbound', async (req: Request, res: Response) => {
+  try {
+    const { phone = '081298765432', message = 'Halo Kak, mau tanya produk ready?', name = 'Calon Pembeli', provider } = req.body;
+    const effectiveProvider = provider || waSession.gatewayProvider || 'direct';
+
+    await handleIncomingCustomerMessage(phone, message, name, effectiveProvider);
+
+    res.json({
+      success: true,
+      message: `Pesan masuk simulasi dari ${name} (${phone}) berhasil diproses!`,
+      data: { phone, message, name, provider: effectiveProvider },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Gagal memproses pesan masuk simulasi' });
+  }
+});
+
 // 5e. Test Gateway Send Message (Uji Coba Pengiriman Pesan Langsung)
 app.post('/api/whatsapp/test-gateway', async (req: Request, res: Response) => {
   try {
-    const { targetPhone, message, provider } = req.body;
+    const { targetPhone, message, provider, token, apiKey, apiUrl } = req.body;
     if (!targetPhone) {
       return res.status(400).json({ error: 'Nomor telepon tujuan uji coba wajib diisi.' });
     }
@@ -1498,18 +2152,38 @@ app.post('/api/whatsapp/test-gateway', async (req: Request, res: Response) => {
       `Halo! Ini adalah pesan uji coba koneksi WhatsApp Gateway Toko Nusantara Digital pada ${new Date().toLocaleTimeString('id-ID')} WIB. Koneksi aktif & siap melayani pelanggan! ✅`;
 
     const activeProvider = provider || waSession.gatewayProvider || 'direct';
-    const originalProvider = waSession.gatewayProvider;
 
-    // Temporarily switch provider if specified for this test
-    if (provider && provider !== originalProvider) {
-      waSession.gatewayProvider = provider;
-    }
+    const sendResult = await sendGatewayMessage(targetPhone, testText, {
+      overrideProvider: activeProvider,
+      overrideToken: token,
+      overrideApiKey: apiKey,
+      overrideApiUrl: apiUrl,
+    });
 
-    const sendResult = await sendGatewayMessage(targetPhone, testText);
+    // If test was successful and custom token was provided, auto-save and activate!
+    if (sendResult.success && token && activeProvider === 'fonnte') {
+      const conf = getGatewayConfig();
+      conf.activeProvider = 'fonnte';
+      const cleanT = cleanFonnteToken(token);
+      conf.fonnte = {
+        token: cleanT,
+        device: conf.fonnte.device || targetPhone,
+        quota: conf.fonnte.quota || 'Aktif',
+        status: 'connect',
+        lastTested: new Date().toISOString(),
+      };
+      saveGatewayConfig(conf);
 
-    // Restore provider if switched
-    if (provider && provider !== originalProvider) {
-      waSession.gatewayProvider = originalProvider;
+      waSession = {
+        ...waSession,
+        gatewayProvider: 'fonnte',
+        status: 'connected',
+        phoneNumber: targetPhone,
+        pushName: 'Fonnte Device',
+        platform: 'Fonnte WhatsApp Cloud Gateway (fonnte.com)',
+        connectedAt: new Date().toISOString(),
+        fonnteConfig: conf.fonnte,
+      };
     }
 
     res.json({
@@ -1517,6 +2191,8 @@ app.post('/api/whatsapp/test-gateway', async (req: Request, res: Response) => {
       error: sendResult.error,
       provider: sendResult.provider,
       target: targetPhone,
+      rawResponse: sendResult.rawResponse,
+      session: waSession,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -2015,6 +2691,14 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server WhatsApp Automator running at http://0.0.0.0:${PORT}`);
+
+    // Auto-initialize open Webhook Relay for external gateways (Fonnte/Wablast)
+    provisionOrGetWebhookRelay().then((relay) => {
+      if (relay.enabled && relay.publicUrl) {
+        console.log(`[Webhook Relay Active]: Polling ${relay.publicUrl} every 2.5s`);
+        setInterval(pollWebhookRelay, 2500);
+      }
+    });
   });
 }
 

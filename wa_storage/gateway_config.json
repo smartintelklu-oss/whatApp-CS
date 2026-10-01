@@ -1,11 +1,11 @@
 {
-  "activeProvider": "direct",
+  "activeProvider": "fonnte",
   "fonnte": {
-    "token": "fonnte_demo_token_xyz99",
+    "token": "test_token_user_123456",
     "device": "+62 812-Fonnte",
     "quota": "Aktif",
     "status": "connect",
-    "lastTested": "2026-09-30T22:12:50.041Z"
+    "lastTested": "2026-10-01T22:09:15.959Z"
   },
   "wablast": {
     "apiUrl": "https://api.bablast.id",

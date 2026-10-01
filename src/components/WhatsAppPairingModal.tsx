@@ -22,6 +22,7 @@ import {
   Globe,
   Database,
   ArrowRight,
+  Sparkles,
 } from 'lucide-react';
 
 interface WhatsAppPairingModalProps {
@@ -77,9 +78,14 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
   const [fonnteDevice, setFonnteDevice] = useState<string>('');
   const [fonnteQuota, setFonnteQuota] = useState<string>('');
   const [isConnectingFonnte, setIsConnectingFonnte] = useState<boolean>(false);
+  const [isForceConnectingFonnte, setIsForceConnectingFonnte] = useState<boolean>(false);
   const [fonnteError, setFonnteError] = useState<string | null>(null);
+  const [fonnteErrorDetails, setFonnteErrorDetails] = useState<string | null>(null);
+  const [canForceFonnte, setCanForceFonnte] = useState<boolean>(false);
   const [fonnteSuccess, setFonnteSuccess] = useState<string | null>(null);
   const [isCopiedFonnteWebhook, setIsCopiedFonnteWebhook] = useState<boolean>(false);
+  const [isSimulatingInbound, setIsSimulatingInbound] = useState<boolean>(false);
+  const [simulatedInboundSuccess, setSimulatedInboundSuccess] = useState<string | null>(null);
 
   // Fonnte Test Send Message
   const [testPhoneFonnte, setTestPhoneFonnte] = useState<string>('081298765432');
@@ -109,11 +115,41 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
   const [simPhone, setSimPhone] = useState<string>('+62 812-9876-5432');
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
-  // Webhook URLs
-  const fonnteWebhookUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/fonnte` : '/api/webhook/fonnte';
-  const bablastWebhookUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/bablast` : '/api/webhook/bablast';
+  // Webhook URLs & Relay states
+  const [fonnteWebhookUrl, setFonnteWebhookUrl] = useState<string>(
+    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/fonnte` : '/api/webhook/fonnte'
+  );
+  const [directWebhookUrl, setDirectWebhookUrl] = useState<string>(
+    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/fonnte` : '/api/webhook/fonnte'
+  );
+  const [bablastWebhookUrl, setBablastWebhookUrl] = useState<string>(
+    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/bablast` : '/api/webhook/bablast'
+  );
+  const [webhookRelayConfig, setWebhookRelayConfig] = useState<any>(null);
+  const [webhookStatsData, setWebhookStatsData] = useState<any>(null);
+  const [isSyncingRelay, setIsSyncingRelay] = useState<boolean>(false);
+  const [syncRelayResult, setSyncRelayResult] = useState<string | null>(null);
+  const [isResettingRelay, setIsResettingRelay] = useState<boolean>(false);
+  const [showInboundLogs, setShowInboundLogs] = useState<boolean>(false);
+  const [isCopiedDirectWebhook, setIsCopiedDirectWebhook] = useState<boolean>(false);
+
+  // Fetch live webhook stats and relay config
+  const fetchWebhookDiagnostics = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/webhook-stats');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        if (data.fonnteWebhookUrl) setFonnteWebhookUrl(data.fonnteWebhookUrl);
+        if (data.directWebhookUrl) setDirectWebhookUrl(data.directWebhookUrl);
+        if (data.bablastWebhookUrl) setBablastWebhookUrl(data.bablastWebhookUrl);
+        if (data.relayConfig) setWebhookRelayConfig(data.relayConfig);
+        if (data.stats) setWebhookStatsData(data.stats);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
 
   // Fetch live WhatsApp Web status and gateway config from server
   const fetchStatusAndQr = async () => {
@@ -173,9 +209,11 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
     if (!isOpen) return;
 
     fetchStatusAndQr();
+    fetchWebhookDiagnostics();
 
     const interval = setInterval(() => {
       fetchStatusAndQr();
+      fetchWebhookDiagnostics();
     }, 2500);
 
     return () => clearInterval(interval);
@@ -269,7 +307,87 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
     setTimeout(() => setIsCopiedWablastWebhook(false), 2000);
   };
 
-  // Test send message via Fonnte
+  // Copy Direct Webhook URL
+  const handleCopyDirectWebhook = () => {
+    navigator.clipboard.writeText(directWebhookUrl);
+    setIsCopiedDirectWebhook(true);
+    setTimeout(() => setIsCopiedDirectWebhook(false), 2000);
+  };
+
+  // Force poll / sync incoming messages from Webhook Relay
+  const handleSyncWebhookRelay = async () => {
+    setIsSyncingRelay(true);
+    setSyncRelayResult(null);
+    try {
+      const res = await fetch('/api/whatsapp/webhook-relay/sync', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        if (data.stats) setWebhookStatsData(data.stats);
+        if (data.relayConfig) setWebhookRelayConfig(data.relayConfig);
+        if (data.processedCount > 0) {
+          setSyncRelayResult(`🎉 Sukses! Ditemukan ${data.processedCount} pesan masuk baru dan telah dimasukkan ke Inbox!`);
+        } else {
+          setSyncRelayResult('✅ Antrean webhook relay bersih. Belum ada pesan masuk baru dari Fonnte.');
+        }
+        setTimeout(() => setSyncRelayResult(null), 6000);
+      }
+    } catch (err: any) {
+      setSyncRelayResult('Gagal sinkronisasi: ' + err?.message);
+    } finally {
+      setIsSyncingRelay(false);
+    }
+  };
+
+  // Reset / Regenerate Webhook Relay URL
+  const handleResetWebhookRelay = async () => {
+    if (!window.confirm('Buat URL Webhook Relay baru? Jika ya, Anda harus menyalin dan menempelkan URL baru ke dashboard Fonnte.')) return;
+    setIsResettingRelay(true);
+    try {
+      const res = await fetch('/api/whatsapp/webhook-relay/reset', { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.relayConfig) {
+        setWebhookRelayConfig(data.relayConfig);
+        setFonnteWebhookUrl(data.relayConfig.publicUrl);
+        setSyncRelayResult('✅ URL Webhook Relay baru berhasil dibuat! Salin dan tempelkan ke menu Device di Fonnte.');
+        setTimeout(() => setSyncRelayResult(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setIsResettingRelay(false);
+    }
+  };
+
+  // Simulate Inbound Message (test webhook & auto-reply pipeline)
+  const handleSimulateInboundMessage = async (customMessage?: string) => {
+    setIsSimulatingInbound(true);
+    setSimulatedInboundSuccess(null);
+    try {
+      const res = await fetch('/api/whatsapp/simulate-inbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: '081298765432',
+          message: customMessage || 'Halo Kak CS! Apakah stok Smartphone Pro Max masih ada dan bisa kirim hari ini?',
+          name: 'Budi Santoso (Tes Masuk)',
+          provider: selectedGateway,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSimulatedInboundSuccess(
+          '✅ Pesan masuk simulasi berhasil diproses! Asisten AI otomatis merespon dan pesan telah masuk ke Chat Inbox.'
+        );
+        setTimeout(() => setSimulatedInboundSuccess(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setIsSimulatingInbound(false);
+    }
+  };
+
+  // Test send message via Fonnte (works before or after connecting)
   const handleTestSendFonnte = async () => {
     if (!testPhoneFonnte.trim()) return;
     setIsTestingFonnteSend(true);
@@ -282,19 +400,27 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
         body: JSON.stringify({
           provider: 'fonnte',
           targetPhone: testPhoneFonnte.trim(),
-          message: `Halo! Ini adalah pesan uji coba resmi dari integrasi Fonnte WhatsApp Gateway Toko Nusantara Digital. Sistem aktif pada ${new Date().toLocaleTimeString('id-ID')} WIB.`,
+          token: fonnteToken.trim() || undefined,
+          message: `Halo! Ini adalah pesan uji coba resmi dari integrasi Fonnte WhatsApp Gateway Toko Nusantara Digital. Sistem aktif pada ${new Date().toLocaleTimeString('id-ID')} WIB. ✅`,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setFonnteTestResult({
           success: true,
-          message: `Pesan uji coba berhasil terkirim ke ${testPhoneFonnte} via Fonnte!`,
+          message: `🎉 Pesan uji coba BERHASIL terkirim ke ${testPhoneFonnte} via Fonnte! Token API terbukti valid, aktif, dan siap melayani chat pelanggan.`,
         });
+        setActiveGatewayProvider('fonnte');
+        setFonnteSuccess('Fonnte aktif & terverifikasi via uji kirim pesan!');
+        setFonnteError(null);
+        setCanForceFonnte(false);
+        onPairSuccess(data.session?.phoneNumber || testPhoneFonnte.trim(), 'Fonnte WhatsApp');
       } else {
         setFonnteTestResult({
           success: false,
-          message: data.error || 'Gagal mengirim pesan uji coba via Fonnte.',
+          message:
+            data.error ||
+            'Gagal mengirim pesan via Fonnte. Periksa apakah perangkat WhatsApp di Fonnte berstatus Connect dan nomor tujuan aktif.',
         });
       }
     } catch (err: any) {
@@ -372,23 +498,28 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
     }
   };
 
-  // Connect to Fonnte Gateway
-  const handleConnectFonnte = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Connect to Fonnte Gateway (standard verification or force save)
+  const handleConnectFonnte = async (e?: React.FormEvent, force: boolean = false) => {
+    if (e) e.preventDefault();
     if (!fonnteToken.trim()) {
       setFonnteError('Harap masukkan Token API Fonnte.');
       return;
     }
 
-    setIsConnectingFonnte(true);
+    if (force) {
+      setIsForceConnectingFonnte(true);
+    } else {
+      setIsConnectingFonnte(true);
+    }
     setFonnteError(null);
+    setFonnteErrorDetails(null);
     setFonnteSuccess(null);
 
     try {
       const res = await fetch('/api/whatsapp/connect-fonnte', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: fonnteToken.trim() }),
+        body: JSON.stringify({ token: fonnteToken.trim(), force }),
       });
       const data = await res.json();
 
@@ -397,14 +528,19 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
         setFonnteDevice(data.device || '+62 812-Fonnte');
         if (data.quota) setFonnteQuota(String(data.quota));
         setActiveGatewayProvider('fonnte');
+        setCanForceFonnte(false);
         onPairSuccess(data.device || '+62 812-Fonnte', 'Fonnte CS Bot');
       } else {
         setFonnteError(data.error || 'Gagal menghubungkan ke Fonnte. Periksa token Anda.');
+        if (data.details) setFonnteErrorDetails(data.details);
+        setCanForceFonnte(true);
       }
     } catch (err: any) {
       setFonnteError('Gagal menghubungi server: ' + err?.message);
+      setCanForceFonnte(true);
     } finally {
       setIsConnectingFonnte(false);
+      setIsForceConnectingFonnte(false);
     }
   };
 
@@ -987,99 +1123,378 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
               </div>
 
               {/* Fonnte Configuration Form */}
-              <form onSubmit={handleConnectFonnte} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-                <label className="text-xs font-semibold text-slate-700 block">
-                  Token API Perangkat Fonnte:
-                </label>
-                <div className="flex gap-2">
+              <form onSubmit={(e) => handleConnectFonnte(e, false)} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 block">
+                    Token API Perangkat Fonnte (Device Token):
+                  </label>
+                  {fonnteToken.trim() && (
+                    <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      {fonnteToken.trim().length} karakter
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-2">
                   <input
                     type="text"
                     value={fonnteToken}
-                    onChange={(e) => setFonnteToken(e.target.value)}
-                    placeholder="Contoh: vKx7#9LqM... (dari menu Device di fonnte.com)"
-                    className="w-full text-xs px-3 py-2 bg-white rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                    onChange={(e) => {
+                      setFonnteToken(e.target.value);
+                      if (fonnteError) setFonnteError(null);
+                    }}
+                    placeholder="Contoh: vKx7#9LqM... (Salin dari menu Device di https://md.fonnte.com/)"
+                    className="w-full text-xs px-3 py-2.5 bg-white rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                     required
                   />
-                  <button
-                    type="submit"
-                    disabled={isConnectingFonnte}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold shrink-0 transition-colors shadow-2xs cursor-pointer flex items-center gap-1.5"
-                  >
-                    {isConnectingFonnte ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Menguji...
-                      </>
-                    ) : (
-                      <>
-                        <Radio className="w-3.5 h-3.5" /> Uji & Hubungkan Fonnte
-                      </>
-                    )}
-                  </button>
+
+                  {/* Action Buttons: Standard Verify vs Bypass/Force Connect */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="submit"
+                      disabled={isConnectingFonnte || isForceConnectingFonnte}
+                      className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      {isConnectingFonnte ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Memverifikasi ke Fonnte...
+                        </>
+                      ) : (
+                        <>
+                          <Radio className="w-3.5 h-3.5" /> Uji & Hubungkan Fonnte
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => handleConnectFonnte(e, true)}
+                      disabled={isConnectingFonnte || isForceConnectingFonnte || !fonnteToken.trim()}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                      title="Gunakan opsi ini jika token Anda sudah benar namun verifikasi otomatis Fonnte mengalami kendala"
+                    >
+                      {isForceConnectingFonnte ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Menyimpan...
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-3.5 h-3.5 text-amber-300" /> Simpan & Hubungkan Langsung (Bypass)
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <span className="text-[11px] text-slate-400 block">
-                  *Dapatkan token di dashboard <strong>https://md.fonnte.com/ &gt; Menu Device</strong>.
-                </span>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                  <span>*Salin dari: <strong>https://md.fonnte.com/ &gt; Menu Device &gt; Ikon Token</strong></span>
+                  <a
+                    href="https://md.fonnte.com/device"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-emerald-700 hover:underline flex items-center gap-0.5 font-semibold"
+                  >
+                    Buka Menu Device Fonnte <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
 
                 {fonnteError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-                    <span>{fonnteError}</span>
+                  <div className="p-3.5 bg-red-50/90 border border-red-200 rounded-xl text-xs text-red-800 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="font-bold text-red-900">{fonnteError}</div>
+                        {fonnteErrorDetails && (
+                          <div className="text-[11px] text-red-700 leading-relaxed">{fonnteErrorDetails}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Shortcut to Force Connect */}
+                    {canForceFonnte && (
+                      <div className="pt-2 border-t border-red-200/80 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] font-medium text-red-700">Yakin token sudah benar?</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleConnectFonnte(e, true)}
+                          disabled={isForceConnectingFonnte}
+                          className="px-3 py-1 bg-red-700 hover:bg-red-800 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                        >
+                          <Zap className="w-3 h-3" /> Tetap Gunakan Token Ini (Simpan & Aktifkan)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {fonnteSuccess && (
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                    <span>{fonnteSuccess} (Nomor: {fonnteDevice}, Kuota: {fonnteQuota || 'Aktif'})</span>
+                    <div>
+                      <span className="font-bold">{fonnteSuccess}</span>
+                      <span className="text-emerald-700 ml-1">
+                        (Perangkat: {fonnteDevice}, Kuota: {fonnteQuota || 'Aktif'})
+                      </span>
+                    </div>
                   </div>
                 )}
               </form>
 
+              {/* Troubleshooting & Guide Box for Fonnte */}
+              <div className="p-4 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2 text-xs">
+                <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                  <AlertCircle className="w-4 h-4 text-amber-600" />
+                  <span>Solusi Jika Token Selalu Dinyatakan Invalid oleh Fonnte:</span>
+                </div>
+                <ul className="space-y-1.5 text-[11px] text-amber-900 list-disc list-inside leading-relaxed pl-1">
+                  <li>
+                    <strong>Gunakan Token Perangkat (Bukan Token Akun):</strong> Buka{' '}
+                    <a
+                      href="https://md.fonnte.com/device"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-amber-800 font-bold underline"
+                    >
+                      md.fonnte.com/device
+                    </a>
+                    , pilih perangkat WhatsApp Anda, lalu klik tombol/ikon <strong>Token</strong>.
+                  </li>
+                  <li>
+                    <strong>Status WhatsApp di Fonnte:</strong> Pastikan di dashboard Fonnte status perangkat bertuliskan{' '}
+                    <span className="bg-emerald-100 text-emerald-800 px-1 rounded font-bold">Connect</span>. Jika{' '}
+                    <span className="bg-red-100 text-red-800 px-1 rounded font-bold">Disconnect</span>, lakukan Scan QR di Fonnte terlebih dahulu agar WhatsApp di HP Anda terhubung ke server Fonnte.
+                  </li>
+                  <li>
+                    <strong>Gunakan Tombol "Simpan & Hubungkan Langsung":</strong> Jika Anda yakin token sudah benar dari Fonnte, gunakan tombol hitam di atas untuk menyimpan token langsung tanpa validasi ketat.
+                  </li>
+                  <li>
+                    <strong>Uji Kirim Pesan:</strong> Masukkan nomor tujuan di kotak uji coba di bawah dan klik <em>"Kirim Pesan Tes"</em>. Jika pesan sampai ke WhatsApp Anda, token terbukti 100% aktif dan sistem otomatis mengaktifkannya!
+                  </li>
+                </ul>
+              </div>
+
               {/* Webhook Settings Box for Fonnte */}
-              <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2.5 shadow-2xs">
+              <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-3.5 shadow-2xs">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-800 block">
-                    URL Webhook Pesan Masuk (Tempel di Dashboard Fonnte):
-                  </label>
-                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-semibold">
-                    Wajib untuk Terima Chat & Auto-Reply AI
+                  <div className="flex items-center gap-1.5">
+                    <Radio className="w-4 h-4 text-emerald-600 animate-pulse" />
+                    <label className="text-xs font-bold text-slate-800 block">
+                      URL Webhook Pesan Masuk (Tempel di Dashboard Fonnte):
+                    </label>
+                  </div>
+                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Bebas Blokir Google (Anti-302)
                   </span>
                 </div>
 
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={fonnteWebhookUrl}
-                    className="w-full text-xs px-3 py-2 bg-slate-50 rounded-lg border border-slate-300 font-mono text-slate-700 select-all"
-                  />
+                {/* Primary Webhook Relay Input & Copy */}
+                <div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={fonnteWebhookUrl}
+                      className="w-full text-xs px-3 py-2 bg-emerald-50/50 rounded-lg border border-emerald-300 font-mono text-emerald-900 select-all font-semibold"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopyFonnteWebhook}
+                      className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-2xs"
+                    >
+                      {isCopiedFonnteWebhook ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-300" /> Disalin!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" /> Salin Webhook
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      Auto-Poller Aktif (Memeriksa pesan setiap 2,5 detik)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSyncWebhookRelay}
+                        disabled={isSyncingRelay}
+                        className="text-emerald-700 hover:text-emerald-900 font-semibold underline cursor-pointer flex items-center gap-1 text-[11px] disabled:opacity-50"
+                      >
+                        {isSyncingRelay ? (
+                          <>
+                            <RefreshCw className="w-3 h-3 animate-spin" /> Menarik...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-3 h-3" /> Tarik Pesan Sekarang
+                          </>
+                        )}
+                      </button>
+                      <span>•</span>
+                      <button
+                        type="button"
+                        onClick={handleResetWebhookRelay}
+                        disabled={isResettingRelay}
+                        className="text-slate-500 hover:text-slate-800 underline cursor-pointer text-[11px]"
+                      >
+                        Reset URL
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {syncRelayResult && (
+                  <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>{syncRelayResult}</span>
+                  </div>
+                )}
+
+                {/* Important Technical Root Cause Explanation */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <div className="p-1 rounded-md bg-amber-100 text-amber-800 shrink-0 mt-0.5">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-800 text-[11px]">
+                        Mengapa Webhook Sebelumnya Tidak Terbaca?
+                      </div>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Tautan preview internal aplikasi (<code className="bg-slate-200 px-1 py-0.2 rounded font-mono text-[10px]">ais-dev-...run.app</code>) dilindungi sistem otentikasi Google yang merespons dengan <em>HTTP 302 Redirect</em> bagi pihak luar. Server Fonnte di luar tidak memiliki cookie Google Anda, sehingga pengiriman webhook dicegat.
+                      </p>
+                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed">
+                        ✅ <strong>Solusi:</strong> Salin <strong>URL Webhook Bebas Blokir</strong> berwarna hijau di atas, lalu tempelkan ke kolom <strong>Webhook URL</strong> pada menu <strong>Device</strong> di dashboard <a href="https://md.fonnte.com/device" target="_blank" rel="noreferrer" className="underline font-bold text-emerald-900">md.fonnte.com</a>. Sistem relay terbuka ini dijamin bisa menerima kiriman Fonnte 100%!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Webhook Inbound Traffic Diagnostics */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-600" /> Monitor Lalu Lintas Pesan Masuk (Live):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowInboundLogs(!showInboundLogs)}
+                      className="text-[11px] text-slate-600 hover:text-slate-900 underline cursor-pointer font-medium"
+                    >
+                      {showInboundLogs ? 'Tutup Log Detail' : 'Buka Log Detail'}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <div className="text-[10px] text-slate-500">Total Diterima</div>
+                      <div className="text-sm font-bold text-slate-800">
+                        {webhookStatsData?.totalReceived || 0}
+                      </div>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <div className="text-[10px] text-slate-500">Pengirim Terakhir</div>
+                      <div className="text-xs font-bold text-slate-800 truncate" title={webhookStatsData?.lastSender || '-'}>
+                        {webhookStatsData?.lastSender || '-'}
+                      </div>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <div className="text-[10px] text-slate-500">Jam Terakhir</div>
+                      <div className="text-xs font-bold text-slate-800">
+                        {webhookStatsData?.lastReceivedAt
+                          ? new Date(webhookStatsData.lastReceivedAt).toLocaleTimeString('id-ID')
+                          : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {webhookStatsData?.lastMessage && (
+                    <div className="p-2 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-700 flex items-center gap-1.5">
+                      <span className="text-slate-400 shrink-0 font-medium">Isi pesan terakhir:</span>
+                      <span className="font-semibold truncate">"{webhookStatsData.lastMessage}"</span>
+                    </div>
+                  )}
+
+                  {showInboundLogs && (
+                    <div className="mt-2 space-y-1 max-h-40 overflow-y-auto border-t border-slate-200 pt-2">
+                      {webhookStatsData?.recentLogs && webhookStatsData.recentLogs.length > 0 ? (
+                        webhookStatsData.recentLogs.map((log: any) => (
+                          <div
+                            key={log.id}
+                            className="p-1.5 bg-white rounded border border-slate-200 text-[10px] flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-1.5 truncate">
+                              <span className="font-bold text-slate-800">{log.name || log.sender}:</span>
+                              <span className="text-slate-600 truncate">"{log.message}"</span>
+                            </div>
+                            <span className="text-slate-400 shrink-0 text-[9px]">{log.receivedAt}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-2 text-slate-400 text-[11px]">
+                          Belum ada log pesan masuk yang tercatat.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Direct Webhook (Advanced/Alternative) */}
+                <div className="pt-1 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>URL Direct (Deploy Mandiri/Production):</span>
                   <button
                     type="button"
-                    onClick={handleCopyFonnteWebhook}
-                    className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors"
+                    onClick={handleCopyDirectWebhook}
+                    className="text-slate-700 hover:text-slate-900 font-semibold underline cursor-pointer flex items-center gap-1 text-[11px]"
                   >
-                    {isCopiedFonnteWebhook ? (
+                    {isCopiedDirectWebhook ? (
                       <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" /> Disalin!
+                        <Check className="w-3 h-3 text-emerald-600" /> Disalin!
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3.5 h-3.5" /> Salin Webhook
+                        <Copy className="w-3 h-3" /> Salin Direct URL
                       </>
                     )}
                   </button>
                 </div>
 
-                <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 space-y-1">
-                  <div className="font-semibold text-slate-800 mb-0.5">Panduan Pengaturan di Fonnte:</div>
-                  <ol className="list-decimal list-inside space-y-0.5 text-[11px]">
-                    <li>Login ke dashboard <strong>https://md.fonnte.com/</strong>.</li>
-                    <li>Buka menu <strong>Device</strong> &gt; klik perangkat WhatsApp Anda.</li>
-                    <li>Tempelkan URL Webhook di atas ke kolom <strong>Webhook URL</strong>.</li>
-                    <li>Centang opsi <strong>Auto Read</strong> (opsional) dan klik <strong>Save</strong>.</li>
-                    <li>Pesan masuk dari pelanggan akan otomatis masuk ke dashboard ini dan dibalas pintar oleh Asisten AI!</li>
-                  </ol>
+                {/* Simulation Pipeline Test */}
+                <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] text-slate-600">
+                    <span className="font-semibold text-slate-800">Uji Alur Pesan Masuk & Balasan AI:</span>
+                    <p className="text-[10px] text-slate-500">
+                      Simulasikan chat dari pelanggan untuk memastikan inbox dan auto-responder AI berfungsi 100%.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateInboundMessage()}
+                    disabled={isSimulatingInbound}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                  >
+                    {isSimulatingInbound ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Menguji Alur Masuk...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Uji Simulasi Pesan Masuk
+                      </>
+                    )}
+                  </button>
                 </div>
+
+                {simulatedInboundSuccess && (
+                  <div className="p-2.5 bg-emerald-100 border border-emerald-300 rounded-lg text-xs text-emerald-900 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>{simulatedInboundSuccess}</span>
+                  </div>
+                )}
               </div>
 
               {/* Fonnte Live Test Message Sender */}
