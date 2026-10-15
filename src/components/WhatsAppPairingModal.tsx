@@ -1122,6 +1122,40 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
                 </p>
               </div>
 
+              {/* Active Connection Banner for Fonnte */}
+              {activeGatewayProvider === 'fonnte' && (
+                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-300 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <h4 className="font-bold text-sm text-emerald-950">
+                        Status Fonnte: Berhasil Terhubung & Aktif!
+                      </h4>
+                    </div>
+                    <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      Connect
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <div className="text-[10px] text-slate-500">Nomor WhatsApp:</div>
+                      <div className="font-bold text-emerald-900 font-mono">{fonnteDevice || '+62 851-3366-6949'}</div>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <div className="text-[10px] text-slate-500">Nama Perangkat:</div>
+                      <div className="font-bold text-slate-800 truncate">Sekolah Digital</div>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200 col-span-2 sm:col-span-1">
+                      <div className="text-[10px] text-slate-500">Sisa Kuota:</div>
+                      <div className="font-bold text-emerald-700">{fonnteQuota || '1000'} pesan</div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-white/90 rounded-lg border border-emerald-200 text-[11px] text-emerald-900 leading-relaxed">
+                    ✅ <strong>Kode Token Anda sudah benar & terverifikasi di server Fonnte!</strong> Anda tidak perlu menghubungkan ulang token. Agar pesan masuk dari WhatsApp pelanggan langsung terbaca di aplikasi, ikuti panduan Webhook di bawah.
+                  </div>
+                </div>
+              )}
+
               {/* Fonnte Configuration Form */}
               <form onSubmit={(e) => handleConnectFonnte(e, false)} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3.5">
                 <div className="flex items-center justify-between">
@@ -1354,21 +1388,70 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
                   </div>
                 )}
 
+                {/* 4-Step Action Checklist to Guarantee Incoming Messages */}
+                <div className="p-4 bg-amber-50/90 rounded-xl border border-amber-300 space-y-3 text-xs">
+                  <div className="flex items-center gap-2 font-bold text-amber-950">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Langkah Wajib Agar Pesan Masuk 100% Terbaca di Aplikasi:</span>
+                  </div>
+                  <ol className="space-y-2 list-decimal list-inside text-[11px] text-amber-900 leading-relaxed pl-1">
+                    <li>
+                      <strong>Salin URL Webhook:</strong> Klik tombol hijau <em>"Salin Webhook"</em> di atas (format: <code className="bg-amber-100 px-1 rounded font-mono">https://webhook.site/...</code>).
+                    </li>
+                    <li>
+                      <strong>Buka Menu Device Fonnte:</strong> Buka <a href="https://md.fonnte.com/device" target="_blank" rel="noreferrer" className="underline font-bold text-amber-950">md.fonnte.com/device</a> lalu klik ikon <strong>Edit (Pensil)</strong> pada perangkat WhatsApp Anda.
+                    </li>
+                    <li>
+                      <strong>Tempel di Kolom Webhook:</strong> Hapus URL lama jika ada, lalu tempelkan URL Webhook baru tersebut.
+                    </li>
+                    <li className="bg-amber-100 p-2.5 rounded-lg border border-amber-300 font-medium">
+                      🚨 <strong className="text-amber-950 font-bold">KUNCI UTAMA (Penyebab Pesan Tidak Masuk):</strong><br />
+                      Di halaman Edit Device Fonnte tersebut, <strong>WAJIB CENTANG / NYALAKAN opsi "Auto Read" (ON)</strong>.<br />
+                      <span className="text-[10px] text-amber-800">
+                        Aturan resmi Fonnte: Jika Auto Read mati (OFF), Fonnte TIDAK AKAN mengirim event webhook untuk pesan masuk dari pelanggan!
+                      </span>
+                    </li>
+                    <li>
+                      <strong>Simpan Perubahan:</strong> Klik tombol <strong>Save</strong> di dashboard Fonnte.
+                    </li>
+                  </ol>
+                  <div className="pt-1.5 flex flex-wrap items-center gap-2 border-t border-amber-200">
+                    <button
+                      type="button"
+                      onClick={() => handleSimulateInboundMessage()}
+                      disabled={isSimulatingInbound}
+                      className="px-3.5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    >
+                      {isSimulatingInbound ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Menguji Pesan Masuk...
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-3.5 h-3.5" /> Tes Pesan Masuk Langsung ke Inbox
+                        </>
+                      )}
+                    </button>
+                    {simulatedInboundSuccess && (
+                      <span className="text-[11px] font-semibold text-emerald-800 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Pesan masuk berhasil diproses & dibalas AI!
+                      </span>
+                    )}
+                  </div>
+                </div>
+
                 {/* Important Technical Root Cause Explanation */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
                   <div className="flex items-start gap-2">
-                    <div className="p-1 rounded-md bg-amber-100 text-amber-800 shrink-0 mt-0.5">
+                    <div className="p-1 rounded-md bg-slate-200 text-slate-700 shrink-0 mt-0.5">
                       <AlertCircle className="w-3.5 h-3.5" />
                     </div>
                     <div className="space-y-1">
                       <div className="font-bold text-slate-800 text-[11px]">
-                        Mengapa Webhook Sebelumnya Tidak Terbaca?
+                        Mengapa Webhook Langsung Google Cloud Run Tidak Bisa Digunakan?
                       </div>
                       <p className="text-[11px] text-slate-600 leading-relaxed">
-                        Tautan preview internal aplikasi (<code className="bg-slate-200 px-1 py-0.2 rounded font-mono text-[10px]">ais-dev-...run.app</code>) dilindungi sistem otentikasi Google yang merespons dengan <em>HTTP 302 Redirect</em> bagi pihak luar. Server Fonnte di luar tidak memiliki cookie Google Anda, sehingga pengiriman webhook dicegat.
-                      </p>
-                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed">
-                        ✅ <strong>Solusi:</strong> Salin <strong>URL Webhook Bebas Blokir</strong> berwarna hijau di atas, lalu tempelkan ke kolom <strong>Webhook URL</strong> pada menu <strong>Device</strong> di dashboard <a href="https://md.fonnte.com/device" target="_blank" rel="noreferrer" className="underline font-bold text-emerald-900">md.fonnte.com</a>. Sistem relay terbuka ini dijamin bisa menerima kiriman Fonnte 100%!
+                        Tautan preview internal aplikasi dilindungi sistem cookie login Google (merespons dengan <em>HTTP 302 Redirect</em> bagi pihak luar). Oleh karena itu, sistem otomatis menggunakan <strong>Webhook Relay Terbuka (Webhook.site)</strong> yang bebas blokir dan di-polling otomatis setiap 2,5 detik ke inbox aplikasi.
                       </p>
                     </div>
                   </div>

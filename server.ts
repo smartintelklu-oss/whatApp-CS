@@ -1743,7 +1743,7 @@ function saveStoredWebhookRelay(config: WebhookRelayConfig): void {
 // Provision or get dedicated open Webhook Relay (bypasses Google Cloud Run cookie protection)
 async function provisionOrGetWebhookRelay(forceNew: boolean = false): Promise<WebhookRelayConfig> {
   let existing = getStoredWebhookRelay();
-  if (!forceNew && existing && existing.uuid && existing.publicUrl) {
+  if (!forceNew && existing && existing.uuid && existing.publicUrl && !existing.lastError?.includes('404')) {
     return existing;
   }
 
@@ -1802,8 +1802,8 @@ async function pollWebhookRelay(): Promise<{ processedCount: number; errors: str
 
   try {
     let config = getStoredWebhookRelay();
-    if (!config || !config.enabled || !config.uuid) {
-      config = await provisionOrGetWebhookRelay();
+    if (!config || !config.enabled || !config.uuid || config.lastError?.includes('404')) {
+      config = await provisionOrGetWebhookRelay(true);
       if (!config || !config.enabled || !config.uuid) {
         isPollingRelay = false;
         return { processedCount: 0, errors: ['Webhook relay belum aktif'] };
@@ -1819,6 +1819,13 @@ async function pollWebhookRelay(): Promise<{ processedCount: number; errors: str
     });
 
     if (!res.ok) {
+      if (res.status === 404 || res.status === 410) {
+        console.warn(`[Webhook Relay]: Token ${config.uuid} expired (HTTP ${res.status}), auto-reprovisioning fresh token...`);
+        const fresh = await provisionOrGetWebhookRelay(true);
+        if (fresh && fresh.uuid) {
+          config = fresh;
+        }
+      }
       config.lastError = `HTTP ${res.status} dari webhook relay`;
       saveStoredWebhookRelay(config);
       isPollingRelay = false;

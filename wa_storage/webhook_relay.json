@@ -1,10 +1,10 @@
 {
   "enabled": true,
-  "uuid": "314fa22e-b97b-4756-b2df-4c4560a0a10b",
-  "publicUrl": "https://webhook.site/314fa22e-b97b-4756-b2df-4c4560a0a10b",
-  "createdAt": "2026-10-01T22:37:53.518Z",
-  "totalPolledRequests": 0,
+  "uuid": "4ad536af-092d-4362-a70b-4e9dd12c2952",
+  "publicUrl": "https://webhook.site/4ad536af-092d-4362-a70b-4e9dd12c2952",
+  "createdAt": "2026-10-15T21:34:48.000Z",
+  "totalPolledRequests": 1,
   "autoPollIntervalSec": 2.5,
-  "lastPolledAt": "2026-10-01T22:38:01.022Z",
-  "lastSuccessAt": "2026-10-01T22:38:01.482Z"
+  "lastPolledAt": "2026-10-15T21:38:06.591Z",
+  "lastSuccessAt": "2026-10-15T21:38:07.064Z"
 }
