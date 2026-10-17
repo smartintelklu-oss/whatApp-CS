@@ -2,6 +2,22 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api/webhook/fonnte",
+      "destination": "/api/webhook/fonnte"
+    },
+    {
+      "source": "/api/whatsapp/webhook-relay/sync",
+      "destination": "/api/whatsapp/webhook-relay/sync"
+    },
+    {
+      "source": "/api/whatsapp/webhook-relay/reset",
+      "destination": "/api/whatsapp/webhook-relay/reset"
+    },
+    {
+      "source": "/api/whatsapp/webhook-stats",
+      "destination": "/api/whatsapp/webhook-stats"
+    },
+    {
       "source": "/api/whatsapp/connect-fonnte",
       "destination": "/api/whatsapp/connect-fonnte"
     },

@@ -1,5 +1,18 @@
 [
   {
+    "id": "cust_1792240184161_426",
+    "name": "Budi Customer",
+    "phone": "+62 812-3456-7890",
+    "avatar": "https://images.unsplash.com/photo-1534528742163?w=150&auto=format&fit=crop&q=80",
+    "unreadCount": 1,
+    "tag": "Pelanggan Baru",
+    "lastMessageTime": "12.29",
+    "notes": "Pelanggan tersambung otomatis dari pesan WhatsApp masuk (FONNTE).",
+    "totalOrders": 0,
+    "lifetimeValue": "Rp 0",
+    "isAiAutoReplyEnabled": true
+  },
+  {
     "id": "cust_1790894301650_610",
     "name": "Siti Aisyah",
     "phone": "+62 813-9988-7766",
