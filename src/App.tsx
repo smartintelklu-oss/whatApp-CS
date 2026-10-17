@@ -13,6 +13,7 @@ import { KnowledgeBaseSettings } from './components/KnowledgeBaseSettings';
 import { AnalyticsOverview } from './components/AnalyticsOverview';
 import { WhatsAppPairingModal } from './components/WhatsAppPairingModal';
 import { MessageSimulatorModal } from './components/MessageSimulatorModal';
+import { getFonnteSession, sendFonnteMessageDirect } from './services/fonnteClient';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'inbox' | 'scheduled' | 'knowledge' | 'analytics'>('inbox');
@@ -75,16 +76,35 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setWaStatus(data.session.status);
-          if (data.session.gatewayProvider) {
-            setGatewayProvider(data.session.gatewayProvider);
-          } else if (data.gatewayProvider) {
-            setGatewayProvider(data.gatewayProvider);
-          }
+          const activeProv =
+            data.session.gatewayProvider ||
+            data.gatewayProvider ||
+            data.gatewayConfig?.activeProvider ||
+            'direct';
+          setGatewayProvider(activeProv);
           if (data.session.phoneNumber) setWaPhone(data.session.phoneNumber);
           if (data.session.connectedAt) setConnectedAt(data.session.connectedAt);
+        } else {
+          // Fallback for Vercel / serverless host
+          const savedFonnte = getFonnteSession();
+          if (savedFonnte && savedFonnte.token) {
+            setWaStatus('connected');
+            setGatewayProvider('fonnte');
+            if (savedFonnte.device) setWaPhone(savedFonnte.device);
+            if (savedFonnte.connectedAt) setConnectedAt(savedFonnte.connectedAt);
+          }
         }
       })
-      .catch((err) => console.error(err));
+      .catch((_err) => {
+        // Fallback for Vercel / offline host
+        const savedFonnte = getFonnteSession();
+        if (savedFonnte && savedFonnte.token) {
+          setWaStatus('connected');
+          setGatewayProvider('fonnte');
+          if (savedFonnte.device) setWaPhone(savedFonnte.device);
+          if (savedFonnte.connectedAt) setConnectedAt(savedFonnte.connectedAt);
+        }
+      });
   };
 
   useEffect(() => {
@@ -260,6 +280,33 @@ export default function App() {
       )
     );
 
+    // Helper to send directly via Fonnte client (guaranteed for Vercel)
+    const sendDirectFonnte = async () => {
+      const fonnte = getFonnteSession();
+      if (fonnte && fonnte.token && targetContact?.phone) {
+        try {
+          const directRes = await sendFonnteMessageDirect(
+            fonnte.token,
+            targetContact.phone,
+            text,
+            options?.mediaUrl
+          );
+          if (directRes.success) {
+            setMessages((prev) => ({
+              ...prev,
+              [contactId]: [
+                ...(prev[contactId] || []).map((m) =>
+                  m.id === tempId ? { ...m, status: 'delivered' as const } : m
+                ),
+              ],
+            }));
+          }
+        } catch (e) {
+          console.error('Direct Fonnte sending error:', e);
+        }
+      }
+    };
+
     // Call server to send through WhatsApp Web gateway and persist
     fetch('/api/whatsapp/send-message', {
       method: 'POST',
@@ -280,7 +327,18 @@ export default function App() {
         aiReasoning: options?.aiReasoning,
       }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          sendDirectFonnte();
+          return null;
+        }
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) {
+          sendDirectFonnte();
+          return null;
+        }
+        return res.json();
+      })
       .then((data) => {
         if (data?.success && data.message) {
           // Replace temp message with server confirmed message
@@ -294,7 +352,8 @@ export default function App() {
         }
       })
       .catch((err) => {
-        console.error('Failed to send message via gateway:', err);
+        console.warn('Failed to send message via gateway server, attempting direct client fallback:', err);
+        sendDirectFonnte();
       });
   };
 
@@ -468,22 +527,35 @@ export default function App() {
     }).catch((e) => console.error(e));
   };
 
-  // QR Pairing success handler
-  const handlePairSuccess = (phone: string, pushName: string) => {
+  // QR / Fonnte / Wablast Pairing success handler
+  const handlePairSuccess = (
+    phone: string,
+    pushName: string,
+    provider: 'direct' | 'fonnte' | 'wablast' = 'direct'
+  ) => {
     setWaStatus('connected');
+    setGatewayProvider(provider);
     setWaPhone(phone);
     setConnectedAt(new Date().toISOString());
 
-    fetch('/api/whatsapp/pair-confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber: phone, pushName }),
-    }).catch((e) => console.error(e));
+    if (provider === 'direct') {
+      fetch('/api/whatsapp/pair-confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: phone, pushName }),
+      }).catch((e) => console.error(e));
+    }
   };
 
   // Disconnect handler
   const handleDisconnect = () => {
     setWaStatus('disconnected');
+    setGatewayProvider('direct');
+    setWaPhone('');
+    try {
+      localStorage.removeItem('cs_fonnte_gateway_session');
+      localStorage.removeItem('wa_gateway_provider');
+    } catch {}
     fetch('/api/whatsapp/disconnect', { method: 'POST' }).catch((e) => console.error(e));
   };
 

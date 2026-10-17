@@ -1447,6 +1447,7 @@ app.post('/api/whatsapp/connect-fonnte', async (req: Request, res: Response) => 
         message: diagnosticMessage || 'Berhasil terhubung ke Fonnte WhatsApp Gateway!',
         device: devicePhone,
         deviceName,
+        name: deviceName,
         quota,
         deviceStatus,
         tokenUsed: actualTokenToSave,

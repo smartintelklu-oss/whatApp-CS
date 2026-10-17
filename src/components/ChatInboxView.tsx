@@ -207,10 +207,21 @@ export const ChatInboxView: React.FC<ChatInboxViewProps> = ({
         }),
       });
 
-      const json = await res.json();
-      if (json.success && json.data?.replyText) {
-        setInputText(json.data.replyText);
+      if (res.ok) {
+        const ct = res.headers.get('content-type');
+        if (ct && ct.includes('application/json')) {
+          const json = await res.json();
+          if (json.success && json.data?.replyText) {
+            setInputText(json.data.replyText);
+            return;
+          }
+        }
       }
+
+      // Fallback draft when running on Vercel without backend server
+      setInputText(
+        `Halo Kak ${activeContact.name}! Terima kasih telah menghubungi Toko Nusantara Digital. Ada yang bisa kami bantu terkait pesanan atau info produk hari ini? 😊`
+      );
     } catch (err) {
       console.error('Failed to generate smart reply', err);
     } finally {

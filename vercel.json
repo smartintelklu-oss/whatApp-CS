@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/api/whatsapp/connect-fonnte",
+      "destination": "/api/whatsapp/connect-fonnte"
+    },
+    {
+      "source": "/api/whatsapp/status",
+      "destination": "/api/whatsapp/status"
+    },
+    {
+      "source": "/api/whatsapp/send-message",
+      "destination": "/api/whatsapp/send-message"
+    },
+    {
+      "source": "/api/whatsapp/test-gateway",
+      "destination": "/api/whatsapp/test-gateway"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
