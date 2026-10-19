@@ -1930,6 +1930,16 @@ async function pollWebhookRelay(): Promise<{ processedCount: number; errors: str
 // Direct Webhook for Fonnte (fonnte.com)
 app.all(['/api/webhook/fonnte', '/webhook/fonnte'], async (req: Request, res: Response) => {
   try {
+    if (req.method === 'GET') {
+      return res.json({
+        status: true,
+        message: 'Fonnte webhook endpoint is active and ready to receive incoming WhatsApp messages.',
+        timestamp: new Date().toISOString(),
+        provider: 'fonnte',
+        totalReceived: webhookStats.totalReceived,
+      });
+    }
+
     let body = req.body;
     if (typeof body === 'string') {
       try {
@@ -1958,21 +1968,30 @@ app.all(['/api/webhook/fonnte', '/webhook/fonnte'], async (req: Request, res: Re
       body = req.query || {};
     }
 
-    if (body && body.data && typeof body.data === 'object') {
-      body = { ...body, ...body.data };
+    if (body && body.data) {
+      if (typeof body.data === 'string') {
+        try {
+          body = { ...body, ...JSON.parse(body.data) };
+        } catch {}
+      } else if (typeof body.data === 'object') {
+        body = { ...body, ...body.data };
+      }
     }
 
     console.log('[Fonnte Direct Webhook Inbound Received]:', JSON.stringify(body));
 
-    const sender = body.sender || body.from || body.phone || body.member;
+    const rawSender = body.sender || body.from || body.phone || body.member || body.target || body.wa_id;
+    const sender = rawSender !== undefined && rawSender !== null ? String(rawSender).trim() : '';
+
     const message =
       body.message ||
       body.text ||
       (body.url ? `[Lampiran Media: ${body.filename || 'File'}]` : '') ||
       (body.location ? `[Lokasi: ${body.location}]` : '') ||
-      (body.pollname ? `[Polling: ${body.pollname}]` : '') ||
-      'Pesan WhatsApp Masuk';
-    const name = body.name || body.pushName;
+      (body.pollname ? `[Polling: ${body.pollname}${body.choices ? ` - ${body.choices}` : ''}]` : '') ||
+      (body.choices ? `[Pilihan Polling: ${body.choices}]` : '') ||
+      (sender ? 'Pesan WhatsApp Masuk' : '');
+    const name = body.name || body.pushName || body.pushname || body.senderName;
 
     if (sender) {
       webhookStats.totalReceived++;

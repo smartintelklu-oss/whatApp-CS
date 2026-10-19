@@ -245,5 +245,34 @@
       "timestamp": "12.29",
       "status": "read"
     }
+  ],
+  "cust_1792417703541_466": [
+    {
+      "id": "msg_1792417703541_fakrc",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Pelanggan Baru",
+      "text": "Halo dari test local",
+      "timestamp": "13.48",
+      "status": "read"
+    },
+    {
+      "id": "msg_1792417703549_ra6i8",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Budi",
+      "text": "[Polling: Kepuasan Layanan]",
+      "timestamp": "13.48",
+      "status": "read"
+    },
+    {
+      "id": "msg_1792417729906_civnt",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Budi",
+      "text": "Tes lokal message",
+      "timestamp": "13.48",
+      "status": "read"
+    }
   ]
 }
