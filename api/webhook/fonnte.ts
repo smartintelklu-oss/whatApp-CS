@@ -1,5 +1,8 @@
 // Vercel Serverless Function: Direct Webhook for Fonnte (fonnte.com)
 import type { IncomingMessage, ServerResponse } from 'http';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, doc, setDoc } from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface VercelRequest extends IncomingMessage {
   body: any;
@@ -17,6 +20,12 @@ export const recentWebhookMessages: any[] = [];
 
 // Relay UUID for cross-environment message synchronization
 const DEFAULT_RELAY_UUID = '4ad536af-092d-4362-a70b-4e9dd12c2952';
+
+// Initialize Firestore for cloud persistence across all webhooks
+const fbApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const firestore = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+  ? getFirestore(fbApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(fbApp);
 
 function cleanJsonString(str: string): string {
   return str.replace(/^\uFEFF/, '').trim();
@@ -203,6 +212,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (recentWebhookMessages.length > 50) recentWebhookMessages.pop();
 
       console.log(`[Fonnte Webhook] [SUCCESS] Inbound from ${sender} (${name || 'Unknown'}): "${message}" [${Date.now() - startTime}ms]`);
+
+      // Persist to Cloud Firestore so the dashboard displays it across all sessions
+      try {
+        const cleanDigits = sender.replace(/[^0-9]/g, '');
+        const contactId = 'cust_' + cleanDigits;
+        const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+        await setDoc(doc(firestore, 'contacts', contactId), {
+          id: contactId,
+          name: name ? String(name) : `Pelanggan ${cleanDigits.slice(-4)}`,
+          phone: sender.startsWith('+') ? sender : '+' + sender,
+          unreadCount: 1,
+          lastMessage: String(message),
+          lastMessageTime: timeNow,
+          status: 'Pelanggan Baru',
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+
+        await setDoc(doc(firestore, 'contacts', contactId, 'messages', entry.id), {
+          id: entry.id,
+          contactId,
+          text: String(message),
+          sender: 'customer',
+          timestamp: timeNow,
+          status: 'read',
+        }, { merge: true });
+        console.log(`[Fonnte Webhook] [FIRESTORE SYNC] Saved to Firestore: contacts/${contactId}/messages/${entry.id}`);
+      } catch (fsErr: any) {
+        console.warn('[Fonnte Webhook] [FIRESTORE SYNC WARNING]:', fsErr?.message);
+      }
 
       // Asynchronous background relay to shared webhook relay so live instances sync automatically
       try {

@@ -14,6 +14,12 @@ import { AnalyticsOverview } from './components/AnalyticsOverview';
 import { WhatsAppPairingModal } from './components/WhatsAppPairingModal';
 import { MessageSimulatorModal } from './components/MessageSimulatorModal';
 import { getFonnteSession, sendFonnteMessageDirect } from './services/fonnteClient';
+import {
+  fetchFirestoreContacts,
+  saveFirestoreContact,
+  saveFirestoreMessage,
+  syncGatewayConfigToFirestore,
+} from './services/firebase';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'inbox' | 'scheduled' | 'knowledge' | 'analytics'>('inbox');
@@ -216,6 +222,8 @@ export default function App() {
         });
         setActiveContactId(data.contact.id);
         setActiveTab('inbox');
+        // Save to Firebase Firestore
+        saveFirestoreContact(data.contact).catch(() => {});
         return data.contact;
       }
     } catch (err) {
@@ -266,6 +274,9 @@ export default function App() {
       ...prev,
       [contactId]: [...(prev[contactId] || []), tempMsg],
     }));
+
+    // Save to Firebase Firestore
+    saveFirestoreMessage(contactId, tempMsg).catch(() => {});
 
     // Update contact preview
     setContacts((prev) =>

@@ -1,0 +1,61 @@
+{
+  "entities": {
+    "Contact": {
+      "title": "Contact",
+      "description": "WhatsApp customer contact profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "avatar": { "type": "string", "maxLength": 500 },
+        "unreadCount": { "type": "number" },
+        "lastMessage": { "type": "string", "maxLength": 2000 },
+        "lastMessageTime": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "phone"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Individual WhatsApp chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "contactId": { "type": "string", "maxLength": 128 },
+        "text": { "type": "string", "maxLength": 10000 },
+        "sender": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "contactId", "text", "sender", "timestamp"]
+    },
+    "GatewayConfig": {
+      "title": "GatewayConfig",
+      "description": "Configuration and pairing status for WhatsApp Gateway",
+      "type": "object",
+      "properties": {
+        "activeProvider": { "type": "string", "maxLength": 50 },
+        "deviceName": { "type": "string", "maxLength": 200 },
+        "devicePhone": { "type": "string", "maxLength": 50 },
+        "quota": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["activeProvider"]
+    }
+  },
+  "firestore": {
+    "/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/Contact" },
+      "description": "List of WhatsApp contacts and leads"
+    },
+    "/contacts/{contactId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Chat messages within a contact thread"
+    },
+    "/gateway_config/{configId}": {
+      "schema": { "$ref": "#/entities/GatewayConfig" },
+      "description": "Global gateway settings document"
+    }
+  }
+}

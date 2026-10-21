@@ -274,5 +274,27 @@
       "timestamp": "13.48",
       "status": "read"
     }
+  ],
+  "cust_1792589534075_835": [
+    {
+      "id": "msg_1792589534076_xwafr",
+      "contactId": "cust_1792589534075_835",
+      "sender": "customer",
+      "senderName": "Siti Rahma",
+      "text": "Halo kak, saya mau pesan produk nusantara via Fonnte!",
+      "timestamp": "13.32",
+      "status": "read"
+    }
+  ],
+  "cust_1792589766833_468": [
+    {
+      "id": "msg_1792589766835_m6m2g",
+      "contactId": "cust_1792589766833_468",
+      "sender": "customer",
+      "senderName": "Fajar Pratama",
+      "text": "Halo CS, mohon konfirmasi pesanan saya #9981",
+      "timestamp": "13.36",
+      "status": "read"
+    }
   ]
 }

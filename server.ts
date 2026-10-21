@@ -15,11 +15,29 @@ import makeWASocket, {
   type WASocket,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import { initializeApp as initFirebaseApp, getApps as getFirebaseApps, getApp as getFirebaseApp } from 'firebase/app';
+import { getFirestore, doc as fsDoc, setDoc as fsSetDoc } from 'firebase/firestore';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Initialize Firebase Firestore for cloud persistent storage
+let firestoreDb: any = null;
+try {
+  const fbConfigPath = path.join(__dirname, 'firebase-applet-config.json');
+  if (fs.existsSync(fbConfigPath)) {
+    const fbConfig = JSON.parse(fs.readFileSync(fbConfigPath, 'utf-8'));
+    const fbApp = getFirebaseApps().length > 0 ? getFirebaseApp() : initFirebaseApp(fbConfig);
+    firestoreDb = fbConfig.firestoreDatabaseId && fbConfig.firestoreDatabaseId !== '(default)'
+      ? getFirestore(fbApp, fbConfig.firestoreDatabaseId)
+      : getFirestore(fbApp);
+    console.log('[Firebase] Server Firestore initialized with DB ID:', fbConfig.firestoreDatabaseId);
+  }
+} catch (e: any) {
+  console.warn('[Firebase] Server Firestore initialization warning:', e?.message);
+}
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -709,6 +727,32 @@ async function handleIncomingCustomerMessage(
   };
   messagesMap[contact.id] = [...contactMsgs, incomingMsgObj];
   saveStoredMessages(messagesMap);
+
+  // Sync to Cloud Firestore in the background
+  if (firestoreDb && contact) {
+    try {
+      fsSetDoc(fsDoc(firestoreDb, 'contacts', String(contact.id)), {
+        id: String(contact.id),
+        name: String(contact.name),
+        phone: String(contact.phone),
+        avatar: contact.avatar || '',
+        unreadCount: Number(contact.unreadCount || 0),
+        lastMessage: String(text || ''),
+        lastMessageTime: timeStr,
+        status: String(contact.tag || 'Pelanggan Baru'),
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch(() => {});
+
+      fsSetDoc(fsDoc(firestoreDb, 'contacts', String(contact.id), 'messages', String(incomingMsgObj.id)), {
+        id: String(incomingMsgObj.id),
+        contactId: String(contact.id),
+        text: String(incomingMsgObj.text),
+        sender: 'customer',
+        timestamp: String(incomingMsgObj.timestamp),
+        status: 'read',
+      }, { merge: true }).catch(() => {});
+    } catch {}
+  }
 
   // 3. If auto-reply is active, trigger smart reply via Gemini 3.8 Flash asynchronously (non-blocking)
   if (waSession.isAutoReplyActive && contact.isAiAutoReplyEnabled) {

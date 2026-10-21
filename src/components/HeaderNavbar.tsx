@@ -62,7 +62,17 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
         </div>
 
         {/* Right Status Badges & Controls */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
+          {/* Firebase Cloud Firestore Status Badge */}
+          <div
+            className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-900 rounded-xl text-xs"
+            title="Terhubung ke Google Cloud Firebase Firestore (Database Cloud Realtime)"
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+            <span className="font-semibold text-[11px] text-amber-950">Firebase</span>
+            <span className="text-[10px] text-amber-800/80 bg-amber-100/70 px-1 py-0.5 rounded font-mono font-medium">Firestore</span>
+          </div>
+
           {/* WhatsApp Connection Status Badge Button */}
           <button
             onClick={onOpenPairingModal}
