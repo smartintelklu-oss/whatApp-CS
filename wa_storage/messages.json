@@ -106,6 +106,15 @@
       "text": "Halo Kak CS! Apakah stok Smartphone Pro Max masih ada dan bisa kirim hari ini?",
       "timestamp": "22.30",
       "status": "read"
+    },
+    {
+      "id": "msg_1792592199993_uqk6t",
+      "contactId": "cust_1790747874984",
+      "sender": "customer",
+      "senderName": "Hendra Saputra",
+      "text": "Halo dari form urlencoded",
+      "timestamp": "14.16",
+      "status": "read"
     }
   ],
   "cust_1790892747503": [
@@ -243,6 +252,15 @@
       "senderName": "Budi Customer",
       "text": "Halo CS Toko Nusantara Digital, tes pesan masuk webhook",
       "timestamp": "12.29",
+      "status": "read"
+    },
+    {
+      "id": "msg_1792592191987_c0q1e",
+      "contactId": "cust_1792240184161_426",
+      "sender": "customer",
+      "senderName": "Budi Customer",
+      "text": "Halo tes pesan Fonnte",
+      "timestamp": "14.16",
       "status": "read"
     }
   ],

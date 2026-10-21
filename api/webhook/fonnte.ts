@@ -23,9 +23,10 @@ const DEFAULT_RELAY_UUID = '4ad536af-092d-4362-a70b-4e9dd12c2952';
 
 // Initialize Firestore for cloud persistence across all webhooks
 const fbApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const firestore = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-  ? getFirestore(fbApp, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(fbApp);
+const firestore =
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+    ? getFirestore(fbApp, firebaseConfig.firestoreDatabaseId)
+    : getFirestore(fbApp);
 
 function cleanJsonString(str: string): string {
   return str.replace(/^\uFEFF/, '').trim();
@@ -74,7 +75,7 @@ async function parseBody(req: VercelRequest): Promise<any> {
     return {};
   }
 
-  // 5. Read stream with strict safety timeout (preventing Vercel serverless execution hang)
+  // 5. Read stream with safety timeout (500ms max to guarantee sub-second Fonnte response)
   return new Promise((resolve) => {
     let raw = '';
     const timeout = setTimeout(() => {
@@ -91,7 +92,7 @@ async function parseBody(req: VercelRequest): Promise<any> {
         }
       }
       resolve({});
-    }, 1500);
+    }, 500);
 
     req.on('data', (chunk) => {
       raw += typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
@@ -136,6 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     res.status(200).json({
       status: true,
+      response: 'ok',
       message: 'Fonnte webhook endpoint is active and ready to receive incoming WhatsApp messages.',
       timestamp: new Date().toISOString(),
       recentCount: recentWebhookMessages.length,
@@ -145,7 +147,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const startTime = Date.now();
-  console.log(`[Fonnte Webhook] [INBOUND] Method: ${req.method} | Content-Type: ${req.headers['content-type'] || 'none'}`);
 
   try {
     let body = await parseBody(req);
@@ -156,7 +157,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (keys.length === 1 && keys[0].trim().startsWith('{')) {
         try {
           body = JSON.parse(keys[0]);
-          console.log('[Fonnte Webhook] Unwrapped single-key JSON string payload successfully');
         } catch {}
       }
     }
@@ -177,10 +177,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    console.log('[Fonnte Webhook] [PARSED DATA]:', JSON.stringify(body));
-
     // Identify sender: support standard Fonnte parameters
-    const rawSender = body.sender || body.from || body.phone || body.member || body.target || body.wa_id;
+    const rawSender =
+      body.sender || body.from || body.phone || body.member || body.target || body.wa_id;
     const sender = rawSender !== undefined && rawSender !== null ? String(rawSender).trim() : '';
 
     // Identify message content
@@ -196,6 +195,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const name = body.name || body.pushName || body.pushname || body.senderName;
     const device = body.device ? String(body.device) : undefined;
 
+    // Immediately send 200 OK so Fonnte never experiences timeout or marks delivery as failed
+    res.status(200).json({
+      status: true,
+      response: 'ok',
+      message: 'Fonnte webhook received successfully',
+    });
+
+    // Background Processing: Firestore persistence & Webhook relay
     if (sender) {
       const entry = {
         id: 'wh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
@@ -211,38 +218,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recentWebhookMessages.unshift(entry);
       if (recentWebhookMessages.length > 50) recentWebhookMessages.pop();
 
-      console.log(`[Fonnte Webhook] [SUCCESS] Inbound from ${sender} (${name || 'Unknown'}): "${message}" [${Date.now() - startTime}ms]`);
+      console.log(
+        `[Fonnte Webhook] [INBOUND OK] from ${sender} (${name || 'Unknown'}): "${message}" [${Date.now() - startTime}ms]`
+      );
 
-      // Persist to Cloud Firestore so the dashboard displays it across all sessions
-      try {
-        const cleanDigits = sender.replace(/[^0-9]/g, '');
-        const contactId = 'cust_' + cleanDigits;
-        const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-        await setDoc(doc(firestore, 'contacts', contactId), {
-          id: contactId,
-          name: name ? String(name) : `Pelanggan ${cleanDigits.slice(-4)}`,
-          phone: sender.startsWith('+') ? sender : '+' + sender,
-          unreadCount: 1,
-          lastMessage: String(message),
-          lastMessageTime: timeNow,
-          status: 'Pelanggan Baru',
-          updatedAt: new Date().toISOString(),
-        }, { merge: true });
+      // Async Firestore persistence
+      (async () => {
+        try {
+          const cleanDigits = sender.replace(/[^0-9]/g, '');
+          const contactId = 'cust_' + (cleanDigits || Date.now());
+          const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          await setDoc(
+            doc(firestore, 'contacts', contactId),
+            {
+              id: contactId,
+              name: name ? String(name) : `Pelanggan ${cleanDigits.slice(-4) || 'WhatsApp'}`,
+              phone: sender.startsWith('+') ? sender : '+' + sender,
+              unreadCount: 1,
+              lastMessage: String(message),
+              lastMessageTime: timeNow,
+              status: 'Pelanggan Baru',
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
 
-        await setDoc(doc(firestore, 'contacts', contactId, 'messages', entry.id), {
-          id: entry.id,
-          contactId,
-          text: String(message),
-          sender: 'customer',
-          timestamp: timeNow,
-          status: 'read',
-        }, { merge: true });
-        console.log(`[Fonnte Webhook] [FIRESTORE SYNC] Saved to Firestore: contacts/${contactId}/messages/${entry.id}`);
-      } catch (fsErr: any) {
-        console.warn('[Fonnte Webhook] [FIRESTORE SYNC WARNING]:', fsErr?.message);
-      }
+          await setDoc(
+            doc(firestore, 'contacts', contactId, 'messages', entry.id),
+            {
+              id: entry.id,
+              contactId,
+              text: String(message),
+              sender: 'customer',
+              timestamp: timeNow,
+              status: 'read',
+            },
+            { merge: true }
+          );
+          console.log(`[Fonnte Webhook] [FIRESTORE SYNC] Saved to contacts/${contactId}`);
+        } catch (fsErr: any) {
+          console.warn('[Fonnte Webhook] [FIRESTORE SYNC WARNING]:', fsErr?.message);
+        }
+      })().catch(() => {});
 
-      // Asynchronous background relay to shared webhook relay so live instances sync automatically
+      // Async Relay forward
       try {
         fetch(`https://webhook.site/${DEFAULT_RELAY_UUID}`, {
           method: 'POST',
@@ -251,29 +270,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           signal: AbortSignal.timeout(2000),
         }).catch(() => {});
       } catch {}
-
-      // Return 200 OK with status confirmation for Fonnte delivery check
+    } else {
+      console.log('[Fonnte Webhook] [PING/STATUS]:', JSON.stringify(body));
+    }
+  } catch (err: any) {
+    console.error('[Fonnte Webhook] [RECOVERED ERROR]:', err?.message);
+    // Even on error, always return 200 OK so Fonnte doesn't flag webhook delivery failure
+    if (!res.writableEnded) {
       res.status(200).json({
         status: true,
-        message: 'Fonnte webhook processed successfully',
         response: 'ok',
-        data: entry,
+        warning: err?.message,
       });
-      return;
     }
-
-    // Ping / Device status / Verification event from Fonnte
-    console.log('[Fonnte Webhook] [STATUS/PING EVENT]:', JSON.stringify(body));
-    res.status(200).json({
-      status: true,
-      message: 'Webhook received (ping/verification)',
-      received: body,
-    });
-  } catch (err: any) {
-    console.error('[Fonnte Webhook] [PARSING ERROR]:', err);
-    res.status(200).json({
-      status: false,
-      error: err?.message || 'Error processing webhook',
-    });
   }
 }

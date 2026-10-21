@@ -16,7 +16,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { initializeApp as initFirebaseApp, getApps as getFirebaseApps, getApp as getFirebaseApp } from 'firebase/app';
-import { getFirestore, doc as fsDoc, setDoc as fsSetDoc } from 'firebase/firestore';
+import { getFirestore, doc as fsDoc, setDoc as fsSetDoc, getDoc as fsGetDoc } from 'firebase/firestore';
 
 dotenv.config();
 
@@ -449,7 +449,58 @@ function saveGatewayConfig(config: GatewayConfig): void {
   } catch (e) {
     console.error('Error saving gateway config file:', e);
   }
+
+  // Also sync to Cloud Firestore so it persists across all devices & serverless instances
+  if (firestoreDb) {
+    try {
+      fsSetDoc(
+        fsDoc(firestoreDb, 'gateway_config', 'current'),
+        {
+          activeProvider: config.activeProvider || 'fonnte',
+          fonnteToken: config.fonnte?.token || '',
+          deviceName: config.fonnte?.device || '',
+          devicePhone: config.fonnte?.device || '',
+          quota: String(config.fonnte?.quota || ''),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch((err: any) => console.warn('[Firestore] Sync gateway_config warning:', err?.message));
+    } catch (fsErr: any) {
+      console.warn('[Firestore] Sync gateway_config error:', fsErr?.message);
+    }
+  }
 }
+
+async function syncGatewayConfigFromFirestore(): Promise<void> {
+  if (!firestoreDb) return;
+  try {
+    const snap = await fsGetDoc(fsDoc(firestoreDb, 'gateway_config', 'current'));
+    if (snap.exists()) {
+      const data = snap.data();
+      const currentConfig = getGatewayConfig();
+      let changed = false;
+      if (data.fonnteToken && (!currentConfig.fonnte.token || currentConfig.fonnte.token !== data.fonnteToken)) {
+        currentConfig.fonnte.token = data.fonnteToken;
+        changed = true;
+      }
+      if (data.activeProvider) {
+        currentConfig.activeProvider = data.activeProvider;
+        changed = true;
+      }
+      if (data.deviceName && !currentConfig.fonnte.device) {
+        currentConfig.fonnte.device = data.deviceName;
+        changed = true;
+      }
+      if (changed) {
+        fs.writeFileSync(GATEWAY_CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        console.log('[Firestore] Synced gateway config & token from Firestore successfully');
+      }
+    }
+  } catch (e: any) {
+    console.warn('[Firestore] Error loading gateway config from Firestore:', e?.message);
+  }
+}
+syncGatewayConfigFromFirestore().catch(() => {});
 
 // Unified message dispatcher supporting Baileys Direct, Fonnte, and Wablast
 async function sendGatewayMessage(
@@ -2053,14 +2104,21 @@ app.all(['/api/webhook/fonnte', '/webhook/fonnte'], async (req: Request, res: Re
       });
       if (webhookStats.recentLogs.length > 25) webhookStats.recentLogs.pop();
 
-      await handleIncomingCustomerMessage(String(sender), String(message), name ? String(name) : undefined, 'fonnte');
-      return res.json({ status: true, message: 'Fonnte webhook processed successfully', response: 'ok' });
+      // Immediately return 200 OK to Fonnte so Fonnte never experiences timeout or delivery error
+      res.json({ status: true, message: 'Fonnte webhook processed successfully', response: 'ok' });
+
+      // Run customer message handling and auto-reply asynchronously in background
+      handleIncomingCustomerMessage(String(sender), String(message), name ? String(name) : undefined, 'fonnte').catch(
+        (err) => console.error('[Fonnte Inbound Handler Error]:', err?.message)
+      );
+      return;
     }
 
-    res.json({ status: false, message: 'No sender identified in payload', receivedPayload: body });
+    // Ping or device update from Fonnte (return status: true so Fonnte delivery check passes)
+    res.json({ status: true, message: 'Fonnte ping/status received successfully', response: 'ok', receivedPayload: body });
   } catch (err: any) {
     console.error('Fonnte webhook error:', err);
-    res.status(500).json({ status: false, error: err?.message });
+    res.status(200).json({ status: true, response: 'ok', warning: err?.message });
   }
 });
 

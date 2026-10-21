@@ -32,6 +32,10 @@ import {
   getFonnteSession,
   clearFonnteSession,
 } from '../services/fonnteClient';
+import {
+  fetchFirestoreGatewayConfig,
+  saveFirestoreGatewayConfig,
+} from '../services/firebase';
 
 interface WhatsAppPairingModalProps {
   isOpen: boolean;
@@ -247,6 +251,29 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
         }
       }
     }
+
+    // Cloud Database (Firebase) check: sync token across multiple devices
+    try {
+      fetchFirestoreGatewayConfig().then((fsConfig) => {
+        if (fsConfig && fsConfig.fonnteToken) {
+          setFonnteToken((prev) => (prev ? prev : fsConfig.fonnteToken));
+          if (fsConfig.deviceName) setFonnteDevice((prev) => (prev ? prev : fsConfig.deviceName));
+          if (fsConfig.quota) setFonnteQuota((prev) => (prev ? prev : String(fsConfig.quota)));
+          if (fsConfig.activeProvider === 'fonnte') {
+            setActiveGatewayProvider('fonnte');
+            if (!hasLoadedGatewayConfig) {
+              setSelectedGateway('fonnte');
+              setHasLoadedGatewayConfig(true);
+            }
+            onPairSuccess(
+              fsConfig.devicePhone || fsConfig.deviceName || '+62 851-Fonnte',
+              fsConfig.deviceName || 'Fonnte CS Bot',
+              'fonnte'
+            );
+          }
+        }
+      }).catch(() => {});
+    } catch {}
   };
 
   // Poll status while modal is open
@@ -693,6 +720,14 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
         deviceStatus: 'connect',
         connectedAt: new Date().toISOString(),
       });
+      // Persist to Cloud Firestore so the token is immediately accessible from any other device
+      saveFirestoreGatewayConfig({
+        fonnteToken: cleaned,
+        activeProvider: 'fonnte',
+        deviceName: resultName,
+        devicePhone: resultDevice,
+        quota: resultQuota,
+      }).catch((fsErr) => console.warn('Failed to sync Fonnte token to Firestore:', fsErr));
       onPairSuccess(resultDevice, resultName, 'fonnte');
     }
 

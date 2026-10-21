@@ -13,13 +13,17 @@ import { KnowledgeBaseSettings } from './components/KnowledgeBaseSettings';
 import { AnalyticsOverview } from './components/AnalyticsOverview';
 import { WhatsAppPairingModal } from './components/WhatsAppPairingModal';
 import { MessageSimulatorModal } from './components/MessageSimulatorModal';
-import { getFonnteSession, sendFonnteMessageDirect } from './services/fonnteClient';
 import {
   fetchFirestoreContacts,
   saveFirestoreContact,
   saveFirestoreMessage,
   syncGatewayConfigToFirestore,
+  fetchFirestoreGatewayConfig,
+  saveFirestoreGatewayConfig,
+  subscribeToContacts,
+  subscribeToGatewayConfig,
 } from './services/firebase';
+import { saveFonnteSession, getFonnteSession, sendFonnteMessageDirect } from './services/fonnteClient';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'inbox' | 'scheduled' | 'knowledge' | 'analytics'>('inbox');
@@ -118,7 +122,82 @@ export default function App() {
 
     // Auto-sync every 3 seconds so incoming messages & contacts appear across all devices in real-time
     const interval = setInterval(syncServerData, 3000);
-    return () => clearInterval(interval);
+
+    // Real-time listener for Firestore contacts across all devices
+    const unsubscribeContacts = subscribeToContacts((firestoreContacts) => {
+      if (Array.isArray(firestoreContacts) && firestoreContacts.length > 0) {
+        setContacts((prev) => {
+          const map = new Map<string, WhatsAppContact>();
+          prev.forEach((c) => map.set(c.id, c));
+          firestoreContacts.forEach((fc: any) => {
+            const existing = map.get(fc.id);
+            map.set(fc.id, {
+              id: fc.id,
+              name: fc.name || existing?.name || 'Pelanggan',
+              phone: fc.phone || existing?.phone || '',
+              avatar:
+                fc.avatar ||
+                existing?.avatar ||
+                `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
+              unreadCount: typeof fc.unreadCount === 'number' ? fc.unreadCount : existing?.unreadCount || 0,
+              tag: fc.status || fc.tag || existing?.tag || 'Pelanggan Baru',
+              lastMessageTime: fc.lastMessageTime || existing?.lastMessageTime || 'Baru saja',
+              notes: fc.notes || existing?.notes || 'Pelanggan tersinkronisasi via Firebase.',
+              totalOrders: fc.totalOrders || existing?.totalOrders || 0,
+              lifetimeValue: fc.lifetimeValue || existing?.lifetimeValue || 'Rp 0',
+              isAiAutoReplyEnabled: fc.isAiAutoReplyEnabled ?? existing?.isAiAutoReplyEnabled ?? true,
+            });
+          });
+          return Array.from(map.values());
+        });
+      }
+    });
+
+    // Real-time listener for gateway token & config across all devices
+    const unsubscribeGateway = subscribeToGatewayConfig((cfg) => {
+      if (cfg && cfg.fonnteToken) {
+        saveFonnteSession({
+          token: cfg.fonnteToken,
+          device: cfg.devicePhone || cfg.deviceName || '+62 812-Fonnte',
+          name: cfg.deviceName || 'Fonnte CS Bot',
+          quota: cfg.quota || 'Aktif',
+          deviceStatus: 'connect',
+          connectedAt: cfg.updatedAt || new Date().toISOString(),
+        });
+        if (cfg.activeProvider === 'fonnte') {
+          setWaStatus('connected');
+          setGatewayProvider('fonnte');
+          if (cfg.devicePhone) setWaPhone(cfg.devicePhone);
+        }
+      }
+    });
+
+    // Initial check from Firestore for saved Fonnte token
+    fetchFirestoreGatewayConfig()
+      .then((cfg) => {
+        if (cfg && cfg.fonnteToken) {
+          saveFonnteSession({
+            token: cfg.fonnteToken,
+            device: cfg.devicePhone || cfg.deviceName || '+62 812-Fonnte',
+            name: cfg.deviceName || 'Fonnte CS Bot',
+            quota: cfg.quota || 'Aktif',
+            deviceStatus: 'connect',
+            connectedAt: cfg.updatedAt || new Date().toISOString(),
+          });
+          if (cfg.activeProvider === 'fonnte') {
+            setWaStatus('connected');
+            setGatewayProvider('fonnte');
+            if (cfg.devicePhone) setWaPhone(cfg.devicePhone);
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      clearInterval(interval);
+      unsubscribeContacts();
+      unsubscribeGateway();
+    };
   }, []);
 
   // Modals state
@@ -200,7 +279,7 @@ export default function App() {
     setScheduledMessages((prev) => prev.filter((m) => m.id !== id));
   };
 
-  // Add contact to server and local state (Available across all devices)
+  // Add contact to server and local state (Available across all devices via Firestore)
   const handleAddContact = async (contactData: {
     name: string;
     phone: string;
@@ -208,27 +287,42 @@ export default function App() {
     notes?: string;
     isAiAutoReplyEnabled: boolean;
   }) => {
-    try {
-      const res = await fetch('/api/contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(contactData),
-      });
-      const data = await res.json();
-      if (data.success && data.contact) {
-        setContacts((prev) => {
-          const filtered = prev.filter((c) => c.id !== data.contact.id);
-          return [data.contact, ...filtered];
-        });
-        setActiveContactId(data.contact.id);
-        setActiveTab('inbox');
-        // Save to Firebase Firestore
-        saveFirestoreContact(data.contact).catch(() => {});
-        return data.contact;
-      }
-    } catch (err) {
-      console.error('Error adding contact:', err);
-    }
+    const cleanDigits = contactData.phone.replace(/[^0-9]/g, '');
+    const contactId = 'cust_' + (cleanDigits || Date.now());
+    const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+    const newContact: WhatsAppContact = {
+      id: contactId,
+      name: contactData.name,
+      phone: contactData.phone,
+      avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
+      unreadCount: 0,
+      tag: contactData.tag,
+      lastMessageTime: timeStr,
+      notes: contactData.notes || 'Pelanggan baru ditambahkan.',
+      totalOrders: 0,
+      lifetimeValue: 'Rp 0',
+      isAiAutoReplyEnabled: contactData.isAiAutoReplyEnabled,
+    };
+
+    // 1. Instantly update local state so current screen updates without delay
+    setContacts((prev) => [newContact, ...prev.filter((c) => c.id !== newContact.id)]);
+    setActiveContactId(newContact.id);
+    setActiveTab('inbox');
+
+    // 2. Instantly persist to Cloud Firestore (syncs in real-time to all other devices & browsers)
+    saveFirestoreContact(newContact).catch((fsErr) =>
+      console.warn('[Firestore] Contact sync warning:', fsErr)
+    );
+
+    // 3. Also notify server backend if active
+    fetch('/api/contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newContact),
+    }).catch(() => {});
+
+    return newContact;
   };
 
   // Send message manually from agent or bot (Real WhatsApp Delivery)
@@ -567,6 +661,7 @@ export default function App() {
       localStorage.removeItem('cs_fonnte_gateway_session');
       localStorage.removeItem('wa_gateway_provider');
     } catch {}
+    saveFirestoreGatewayConfig({ activeProvider: 'direct' }).catch(() => {});
     fetch('/api/whatsapp/disconnect', { method: 'POST' }).catch((e) => console.error(e));
   };
 
