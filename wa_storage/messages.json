@@ -291,6 +291,15 @@
       "text": "Tes lokal message",
       "timestamp": "13.48",
       "status": "read"
+    },
+    {
+      "id": "msg_1793023599896_ytjf6",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Budi",
+      "text": "Halo saya ingin order produk digital",
+      "timestamp": "14.06",
+      "status": "read"
     }
   ],
   "cust_1792589534075_835": [

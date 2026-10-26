@@ -16,7 +16,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { initializeApp as initFirebaseApp, getApps as getFirebaseApps, getApp as getFirebaseApp } from 'firebase/app';
-import { getFirestore, doc as fsDoc, setDoc as fsSetDoc, getDoc as fsGetDoc } from 'firebase/firestore';
+import { getFirestore, doc as fsDoc, setDoc as fsSetDoc, getDoc as fsGetDoc, collection as fsCollection, getDocs as fsGetDocs } from 'firebase/firestore';
 
 dotenv.config();
 
@@ -1162,7 +1162,18 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.get('/api/whatsapp/status', async (_req: Request, res: Response) => {
   const gatewayConfig = getGatewayConfig();
 
-  if (waSession.gatewayProvider === 'direct' && waSession.status !== 'connected') {
+  // If Fonnte is active and has token, guarantee connected state so it never flickers/blinks
+  if (gatewayConfig.activeProvider === 'fonnte' && gatewayConfig.fonnte?.token) {
+    waSession = {
+      ...waSession,
+      status: 'connected',
+      gatewayProvider: 'fonnte',
+      phoneNumber: gatewayConfig.fonnte.device || '+62 851-3366-6949',
+      pushName: 'Fonnte WhatsApp Gateway',
+      platform: 'Fonnte Cloud Gateway (fonnte.com)',
+      fonnteConfig: gatewayConfig.fonnte,
+    };
+  } else if (waSession.gatewayProvider === 'direct' && waSession.status !== 'connected') {
     if (!waSock && !isStartingWASocket) {
       startWASocket().catch(console.error);
     }
@@ -2354,8 +2365,22 @@ app.post('/api/cs/knowledge-base', (req: Request, res: Response) => {
 });
 
 // Contacts API (Shared across all devices)
-app.get('/api/contacts', (_req: Request, res: Response) => {
-  const contacts = getStoredContacts();
+app.get('/api/contacts', async (_req: Request, res: Response) => {
+  let contacts = getStoredContacts();
+  if (firestoreDb) {
+    try {
+      const snap = await fsGetDocs(fsCollection(firestoreDb, 'contacts'));
+      if (!snap.empty) {
+        const fsContacts = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+        const map = new Map<string, any>();
+        contacts.forEach((c) => map.set(c.id, c));
+        fsContacts.forEach((fc) => map.set(fc.id, { ...(map.get(fc.id) || {}), ...fc }));
+        contacts = Array.from(map.values());
+      }
+    } catch (e: any) {
+      console.warn('Error syncing contacts with Firestore in GET /api/contacts:', e?.message);
+    }
+  }
   res.json({ contacts });
 });
 
@@ -2387,16 +2412,22 @@ app.post('/api/contacts', (req: Request, res: Response) => {
         isAiAutoReplyEnabled: typeof isAiAutoReplyEnabled === 'boolean' ? isAiAutoReplyEnabled : contactsList[existingIndex].isAiAutoReplyEnabled,
       };
       saveStoredContacts(contactsList);
+
+      if (firestoreDb) {
+        fsSetDoc(fsDoc(firestoreDb, 'contacts', String(contactsList[existingIndex].id)), contactsList[existingIndex], { merge: true }).catch(() => {});
+      }
+
       return res.json({ success: true, contact: contactsList[existingIndex], isNew: false });
     }
 
     const newContact = {
-      id: 'cust_' + Date.now(),
+      id: req.body.id || 'cust_' + (clean || Date.now()),
       name,
       phone: display,
       avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
       unreadCount: 0,
       tag: tag || 'Pelanggan Baru',
+      status: tag || 'Pelanggan Baru',
       lastMessageTime: timeStr,
       notes: notes || 'Kontak baru ditambahkan manual dari dashboard.',
       totalOrders: 0,
@@ -2406,6 +2437,13 @@ app.post('/api/contacts', (req: Request, res: Response) => {
 
     const updated = [newContact, ...contactsList];
     saveStoredContacts(updated);
+
+    if (firestoreDb) {
+      fsSetDoc(fsDoc(firestoreDb, 'contacts', String(newContact.id)), {
+        ...newContact,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch((err: any) => console.warn('Error saving contact to Firestore:', err?.message));
+    }
 
     res.json({ success: true, contact: newContact, isNew: true });
   } catch (err: any) {

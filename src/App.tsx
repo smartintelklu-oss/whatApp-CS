@@ -49,15 +49,16 @@ export default function App() {
         return res.json();
       })
       .then((data) => {
-        if (data && Array.isArray(data.contacts)) {
-          setContacts(data.contacts);
-          // Ensure active contact exists in contacts list
-          if (data.contacts.length > 0) {
-            setActiveContactId((current) => {
-              const exists = data.contacts.some((c: any) => c.id === current);
-              return exists ? current : data.contacts[0].id;
+        if (data && Array.isArray(data.contacts) && data.contacts.length > 0) {
+          setContacts((prev) => {
+            const map = new Map<string, WhatsAppContact>();
+            prev.forEach((c) => map.set(c.id, c));
+            data.contacts.forEach((c: any) => {
+              const existing = map.get(c.id);
+              map.set(c.id, { ...(existing || {}), ...c });
             });
-          }
+            return Array.from(map.values());
+          });
         }
       })
       .catch((err) => console.error('Failed to sync contacts:', err));
@@ -84,29 +85,40 @@ export default function App() {
         return res.json();
       })
       .then((data) => {
+        const savedFonnte = getFonnteSession();
         if (data?.session) {
-          setWaStatus(data.session.status);
-          const activeProv =
-            data.session.gatewayProvider ||
-            data.gatewayProvider ||
-            data.gatewayConfig?.activeProvider ||
-            'direct';
-          setGatewayProvider(activeProv);
-          if (data.session.phoneNumber) setWaPhone(data.session.phoneNumber);
-          if (data.session.connectedAt) setConnectedAt(data.session.connectedAt);
-        } else {
-          // Fallback for Vercel / serverless host
-          const savedFonnte = getFonnteSession();
-          if (savedFonnte && savedFonnte.token) {
+          if (data.session.status === 'connected') {
+            setWaStatus('connected');
+            const activeProv =
+              data.session.gatewayProvider ||
+              data.gatewayProvider ||
+              data.gatewayConfig?.activeProvider ||
+              'fonnte';
+            setGatewayProvider(activeProv);
+            if (data.session.phoneNumber) setWaPhone(data.session.phoneNumber);
+            if (data.session.connectedAt) setConnectedAt(data.session.connectedAt);
+          } else if (savedFonnte && savedFonnte.token) {
+            // Keep connected via Fonnte without blinking/flickering
             setWaStatus('connected');
             setGatewayProvider('fonnte');
             if (savedFonnte.device) setWaPhone(savedFonnte.device);
-            if (savedFonnte.connectedAt) setConnectedAt(savedFonnte.connectedAt);
+          } else {
+            setWaStatus(data.session.status);
+            const activeProv =
+              data.session.gatewayProvider ||
+              data.gatewayProvider ||
+              data.gatewayConfig?.activeProvider ||
+              'direct';
+            setGatewayProvider(activeProv);
           }
+        } else if (savedFonnte && savedFonnte.token) {
+          setWaStatus('connected');
+          setGatewayProvider('fonnte');
+          if (savedFonnte.device) setWaPhone(savedFonnte.device);
+          if (savedFonnte.connectedAt) setConnectedAt(savedFonnte.connectedAt);
         }
       })
       .catch((_err) => {
-        // Fallback for Vercel / offline host
         const savedFonnte = getFonnteSession();
         if (savedFonnte && savedFonnte.token) {
           setWaStatus('connected');

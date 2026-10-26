@@ -155,12 +155,16 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
 
   // Fetch live webhook stats and relay config
   const fetchWebhookDiagnostics = async () => {
+    // Direct webhook URL is the most reliable endpoint for Fonnte
+    const directUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/fonnte` : '/api/webhook/fonnte';
+    setFonnteWebhookUrl(directUrl);
+    setDirectWebhookUrl(directUrl);
+
     try {
       const res = await fetch('/api/whatsapp/webhook-stats');
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
-        if (data.fonnteWebhookUrl) setFonnteWebhookUrl(data.fonnteWebhookUrl);
         if (data.directWebhookUrl) setDirectWebhookUrl(data.directWebhookUrl);
         if (data.bablastWebhookUrl) setBablastWebhookUrl(data.bablastWebhookUrl);
         if (data.relayConfig) setWebhookRelayConfig(data.relayConfig);
@@ -186,11 +190,11 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
             setActiveGatewayProvider(currentProvider);
 
             if (data.gatewayConfig) {
+              if (data.gatewayConfig.fonnte?.token) {
+                setFonnteToken(data.gatewayConfig.fonnte.token);
+              }
               if (!hasLoadedGatewayConfig) {
                 setSelectedGateway(currentProvider);
-                if (data.gatewayConfig.fonnte?.token) {
-                  setFonnteToken(data.gatewayConfig.fonnte.token);
-                }
                 if (data.gatewayConfig.wablast?.apiUrl) setWablastApiUrl(data.gatewayConfig.wablast.apiUrl);
                 if (data.gatewayConfig.wablast?.apiKey) setWablastApiKey(data.gatewayConfig.wablast.apiKey);
                 setHasLoadedGatewayConfig(true);
@@ -212,7 +216,6 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
                 data.session.pushName || 'WhatsApp CS',
                 currentProvider
               );
-              return;
             }
 
             const qr = data.qrCodeData || data.session?.qrCodeData;
@@ -256,15 +259,12 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
     try {
       fetchFirestoreGatewayConfig().then((fsConfig) => {
         if (fsConfig && fsConfig.fonnteToken) {
-          setFonnteToken((prev) => (prev ? prev : fsConfig.fonnteToken));
-          if (fsConfig.deviceName) setFonnteDevice((prev) => (prev ? prev : fsConfig.deviceName));
-          if (fsConfig.quota) setFonnteQuota((prev) => (prev ? prev : String(fsConfig.quota)));
+          setFonnteToken(fsConfig.fonnteToken);
+          if (fsConfig.deviceName) setFonnteDevice(fsConfig.deviceName);
+          if (fsConfig.quota) setFonnteQuota(String(fsConfig.quota));
           if (fsConfig.activeProvider === 'fonnte') {
             setActiveGatewayProvider('fonnte');
-            if (!hasLoadedGatewayConfig) {
-              setSelectedGateway('fonnte');
-              setHasLoadedGatewayConfig(true);
-            }
+            setSelectedGateway('fonnte');
             onPairSuccess(
               fsConfig.devicePhone || fsConfig.deviceName || '+62 851-Fonnte',
               fsConfig.deviceName || 'Fonnte CS Bot',
@@ -275,6 +275,31 @@ export const WhatsAppPairingModal: React.FC<WhatsAppPairingModalProps> = ({
       }).catch(() => {});
     } catch {}
   };
+
+  // Immediate token load when modal is opened
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const savedSession = getFonnteSession();
+    if (savedSession && savedSession.token) {
+      setFonnteToken((prev) => prev || savedSession.token);
+      if (savedSession.device) setFonnteDevice((prev) => prev || savedSession.device);
+      if (savedSession.quota) setFonnteQuota((prev) => prev || savedSession.quota);
+      if (savedSession.name) setFonnteName((prev) => prev || savedSession.name);
+    }
+
+    fetchFirestoreGatewayConfig().then((fsConfig) => {
+      if (fsConfig && fsConfig.fonnteToken) {
+        setFonnteToken(fsConfig.fonnteToken);
+        if (fsConfig.deviceName) setFonnteDevice(fsConfig.deviceName);
+        if (fsConfig.quota) setFonnteQuota(String(fsConfig.quota));
+        if (fsConfig.activeProvider === 'fonnte') {
+          setSelectedGateway('fonnte');
+          setActiveGatewayProvider('fonnte');
+        }
+      }
+    }).catch(() => {});
+  }, [isOpen]);
 
   // Poll status while modal is open
   useEffect(() => {

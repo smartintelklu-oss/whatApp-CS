@@ -1,7 +1,7 @@
 // Vercel Serverless Function: Direct Webhook for Fonnte (fonnte.com)
 import type { IncomingMessage, ServerResponse } from 'http';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 interface VercelRequest extends IncomingMessage {
@@ -18,9 +18,6 @@ interface VercelResponse extends ServerResponse {
 // In-memory buffer for recent webhook payloads within serverless container lifecycle
 export const recentWebhookMessages: any[] = [];
 
-// Relay UUID for cross-environment message synchronization
-const DEFAULT_RELAY_UUID = '4ad536af-092d-4362-a70b-4e9dd12c2952';
-
 // Initialize Firestore for cloud persistence across all webhooks
 const fbApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const firestore =
@@ -33,7 +30,7 @@ function cleanJsonString(str: string): string {
 }
 
 async function parseBody(req: VercelRequest): Promise<any> {
-  // 1. If req.body is already a Buffer (e.g. raw body)
+  // 1. If req.body is already a Buffer
   if (req.body && Buffer.isBuffer(req.body)) {
     const text = cleanJsonString(req.body.toString('utf-8'));
     if (!text) return {};
@@ -49,7 +46,7 @@ async function parseBody(req: VercelRequest): Promise<any> {
     }
   }
 
-  // 2. If req.body is already parsed object by Vercel
+  // 2. If req.body is already an object
   if (req.body && typeof req.body === 'object') {
     return req.body;
   }
@@ -64,18 +61,16 @@ async function parseBody(req: VercelRequest): Promise<any> {
         const params = new URLSearchParams(text);
         const entries = Object.fromEntries(params.entries());
         if (Object.keys(entries).length > 0) return entries;
-      } catch {
-        // continue
-      }
+      } catch {}
     }
   }
 
-  // 4. If body stream has already ended without data
+  // 4. If stream ended
   if ((req as any).readableEnded || (req as any).complete) {
     return {};
   }
 
-  // 5. Read stream with safety timeout (500ms max to guarantee sub-second Fonnte response)
+  // 5. Read stream
   return new Promise((resolve) => {
     let raw = '';
     const timeout = setTimeout(() => {
@@ -92,7 +87,7 @@ async function parseBody(req: VercelRequest): Promise<any> {
         }
       }
       resolve({});
-    }, 500);
+    }, 600);
 
     req.on('data', (chunk) => {
       raw += typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
@@ -114,9 +109,8 @@ async function parseBody(req: VercelRequest): Promise<any> {
       }
     });
 
-    req.on('error', (err) => {
+    req.on('error', () => {
       clearTimeout(timeout);
-      console.warn('[Fonnte Webhook Stream Error]:', err?.message);
       resolve({});
     });
   });
@@ -133,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // GET request: health-check, status, & message diagnostics
+  // GET request: health-check, status & recent message logs
   if (req.method === 'GET') {
     res.status(200).json({
       status: true,
@@ -151,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let body = await parseBody(req);
 
-    // Case: body is an object where first key is a raw JSON string (common in curl / form POSTs)
+    // Case: body is an object where first key is a raw JSON string
     if (body && typeof body === 'object' && !Array.isArray(body)) {
       const keys = Object.keys(body);
       if (keys.length === 1 && keys[0].trim().startsWith('{')) {
@@ -161,12 +155,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Fallback to query params if body is empty
+    // Fallback to query params
     if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
       body = req.query || {};
     }
 
-    // Handle nested data wrappers (e.g. { data: { sender: ... } } or { data: "{\"sender\":...}" })
+    // Handle nested data wrappers (e.g. { data: { sender: ... } })
     if (body && body.data) {
       if (typeof body.data === 'string') {
         try {
@@ -195,20 +189,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const name = body.name || body.pushName || body.pushname || body.senderName;
     const device = body.device ? String(body.device) : undefined;
 
-    // Immediately send 200 OK so Fonnte never experiences timeout or marks delivery as failed
-    res.status(200).json({
-      status: true,
-      response: 'ok',
-      message: 'Fonnte webhook received successfully',
-    });
-
-    // Background Processing: Firestore persistence & Webhook relay
     if (sender) {
+      const cleanDigits = sender.replace(/[^0-9]/g, '');
+      const displayPhone = sender.startsWith('+') ? sender : '+' + sender;
+      const contactId = 'cust_' + (cleanDigits || Date.now());
+      const msgId = 'wh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      const customerName = name ? String(name) : `Pelanggan ${cleanDigits.slice(-4) || 'WhatsApp'}`;
+
       const entry = {
-        id: 'wh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        id: msgId,
         sender,
         message: String(message),
-        name: name ? String(name) : undefined,
+        name: customerName,
         device,
         location: body.location || undefined,
         url: body.url || undefined,
@@ -219,69 +212,120 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (recentWebhookMessages.length > 50) recentWebhookMessages.pop();
 
       console.log(
-        `[Fonnte Webhook] [INBOUND OK] from ${sender} (${name || 'Unknown'}): "${message}" [${Date.now() - startTime}ms]`
+        `[Fonnte Webhook] [INBOUND] ${sender} (${customerName}): "${message}" [${Date.now() - startTime}ms]`
       );
 
-      // Async Firestore persistence
-      (async () => {
-        try {
-          const cleanDigits = sender.replace(/[^0-9]/g, '');
-          const contactId = 'cust_' + (cleanDigits || Date.now());
-          const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-          await setDoc(
+      // CRITICAL FOR SERVERLESS: Must await Firestore writes so Vercel does not freeze execution before writes complete!
+      try {
+        await Promise.all([
+          setDoc(
             doc(firestore, 'contacts', contactId),
             {
               id: contactId,
-              name: name ? String(name) : `Pelanggan ${cleanDigits.slice(-4) || 'WhatsApp'}`,
-              phone: sender.startsWith('+') ? sender : '+' + sender,
+              name: customerName,
+              phone: displayPhone,
+              avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?w=150&auto=format&fit=crop&q=80`,
               unreadCount: 1,
               lastMessage: String(message),
               lastMessageTime: timeNow,
               status: 'Pelanggan Baru',
+              notes: 'Pesan masuk dari Fonnte WhatsApp Gateway.',
+              totalOrders: 0,
+              lifetimeValue: 'Rp 0',
+              isAiAutoReplyEnabled: true,
               updatedAt: new Date().toISOString(),
             },
             { merge: true }
-          );
-
-          await setDoc(
-            doc(firestore, 'contacts', contactId, 'messages', entry.id),
+          ),
+          setDoc(
+            doc(firestore, 'contacts', contactId, 'messages', msgId),
             {
-              id: entry.id,
+              id: msgId,
               contactId,
               text: String(message),
               sender: 'customer',
+              senderName: customerName,
               timestamp: timeNow,
               status: 'read',
             },
             { merge: true }
-          );
-          console.log(`[Fonnte Webhook] [FIRESTORE SYNC] Saved to contacts/${contactId}`);
-        } catch (fsErr: any) {
-          console.warn('[Fonnte Webhook] [FIRESTORE SYNC WARNING]:', fsErr?.message);
-        }
-      })().catch(() => {});
+          ),
+        ]);
+        console.log(`[Fonnte Webhook] [FIRESTORE SYNC OK] Saved contacts/${contactId}/messages/${msgId}`);
+      } catch (fsErr: any) {
+        console.error('[Fonnte Webhook] [FIRESTORE SYNC ERROR]:', fsErr?.message);
+      }
 
-      // Async Relay forward
+      // Check if Smart Auto-reply can be sent back to WhatsApp via Fonnte
       try {
-        fetch(`https://webhook.site/${DEFAULT_RELAY_UUID}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(2000),
-        }).catch(() => {});
+        const configSnap = await getDoc(doc(firestore, 'gateway_config', 'current'));
+        if (configSnap.exists()) {
+          const cfg = configSnap.data();
+          const fonnteToken = cfg.fonnteToken;
+          if (fonnteToken && cleanDigits.length >= 8) {
+            const replyText = `Halo Kak ${customerName}! Terima kasih sudah menghubungi kami. Pesan Anda telah kami terima dan tim CS kami akan segera membantu Anda. 😊`;
+            const replyMsgId = 'reply_' + Date.now();
+
+            // Send via Fonnte API
+            const sendParams = new URLSearchParams({
+              target: cleanDigits,
+              message: replyText,
+            });
+
+            await fetch('https://api.fonnte.com/send', {
+              method: 'POST',
+              headers: { Authorization: fonnteToken },
+              body: sendParams,
+              signal: AbortSignal.timeout(3000),
+            })
+              .then((r) => r.json())
+              .then(async (sendRes) => {
+                if (sendRes?.status === true) {
+                  // Save auto-reply to Firestore
+                  await setDoc(
+                    doc(firestore, 'contacts', contactId, 'messages', replyMsgId),
+                    {
+                      id: replyMsgId,
+                      contactId,
+                      text: replyText,
+                      sender: 'bot',
+                      senderName: 'Asisten CS AI',
+                      timestamp: timeNow,
+                      status: 'delivered',
+                      isAiGenerated: true,
+                    },
+                    { merge: true }
+                  );
+                }
+              })
+              .catch(() => {});
+          }
+        }
       } catch {}
-    } else {
-      console.log('[Fonnte Webhook] [PING/STATUS]:', JSON.stringify(body));
-    }
-  } catch (err: any) {
-    console.error('[Fonnte Webhook] [RECOVERED ERROR]:', err?.message);
-    // Even on error, always return 200 OK so Fonnte doesn't flag webhook delivery failure
-    if (!res.writableEnded) {
+
+      // Return instant success response to Fonnte
       res.status(200).json({
         status: true,
         response: 'ok',
-        warning: err?.message,
+        message: 'Fonnte webhook processed successfully',
+        data: entry,
       });
+      return;
     }
+
+    // Ping or device status update from Fonnte
+    res.status(200).json({
+      status: true,
+      response: 'ok',
+      message: 'Fonnte ping/status received successfully',
+      receivedPayload: body,
+    });
+  } catch (err: any) {
+    console.error('[Fonnte Webhook Error]:', err?.message);
+    res.status(200).json({
+      status: true,
+      response: 'ok',
+      warning: err?.message,
+    });
   }
 }
