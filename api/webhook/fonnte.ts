@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfig from '../../firebase-applet-config.json'with{type'json'};
 
 interface VercelRequest extends IncomingMessage {
   body: any;
