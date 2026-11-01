@@ -325,7 +325,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(200).json({
       status: true,
       response: 'ok',
-      warning: err?.message,
+      message: err?.message,
     });
   }
 }
