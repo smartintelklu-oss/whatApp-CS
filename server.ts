@@ -2484,15 +2484,48 @@ app.delete('/api/contacts/:id', (req: Request, res: Response) => {
 });
 
 // Messages API (Shared across all devices)
-app.get('/api/messages', (_req: Request, res: Response) => {
+app.get('/api/messages', async (_req: Request, res: Response) => {
   const messages = getStoredMessages();
+  if (firestoreDb) {
+    try {
+      const contactsSnap = await fsGetDocs(fsCollection(firestoreDb, 'contacts'));
+      for (const cDoc of contactsSnap.docs) {
+        const cId = cDoc.id;
+        const msgsSnap = await fsGetDocs(fsCollection(firestoreDb, 'contacts', cId, 'messages'));
+        if (!msgsSnap.empty) {
+          const fsMsgs = msgsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+          const map = new Map<string, any>();
+          (messages[cId] || []).forEach((m) => map.set(m.id, m));
+          fsMsgs.forEach((m) => map.set(m.id, { ...(map.get(m.id) || {}), ...m }));
+          messages[cId] = Array.from(map.values()).sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+        }
+      }
+    } catch (e: any) {
+      console.warn('Error syncing messages from Firestore in /api/messages:', e?.message);
+    }
+  }
   res.json({ messages });
 });
 
-app.get('/api/messages/:contactId', (req: Request, res: Response) => {
+app.get('/api/messages/:contactId', async (req: Request, res: Response) => {
   const { contactId } = req.params;
   const messagesMap = getStoredMessages();
-  res.json({ messages: messagesMap[contactId] || [] });
+  let contactMsgs = messagesMap[contactId] || [];
+  if (firestoreDb && contactId) {
+    try {
+      const msgsSnap = await fsGetDocs(fsCollection(firestoreDb, 'contacts', String(contactId), 'messages'));
+      if (!msgsSnap.empty) {
+        const fsMsgs = msgsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+        const map = new Map<string, any>();
+        contactMsgs.forEach((m) => map.set(m.id, m));
+        fsMsgs.forEach((m) => map.set(m.id, { ...(map.get(m.id) || {}), ...m }));
+        contactMsgs = Array.from(map.values()).sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+      }
+    } catch (e: any) {
+      console.warn('Error syncing messages from Firestore for contactId:', e?.message);
+    }
+  }
+  res.json({ messages: contactMsgs });
 });
 
 // Add / Save message directly to central store (shared across devices)

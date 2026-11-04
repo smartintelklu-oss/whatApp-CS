@@ -300,6 +300,24 @@
       "text": "Halo saya ingin order produk digital",
       "timestamp": "14.06",
       "status": "read"
+    },
+    {
+      "id": "msg_1793626453929_d9c1v",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Budi",
+      "text": "Halo saya ingin tanya produk",
+      "timestamp": "13.34",
+      "status": "read"
+    },
+    {
+      "id": "msg_1793626459386_wz64g",
+      "contactId": "cust_1792417703541_466",
+      "sender": "customer",
+      "senderName": "Budi",
+      "text": "Tes pesan JSON dari Fonnte",
+      "timestamp": "13.34",
+      "status": "read"
     }
   ],
   "cust_1792589534075_835": [

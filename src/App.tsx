@@ -22,6 +22,7 @@ import {
   saveFirestoreGatewayConfig,
   subscribeToContacts,
   subscribeToGatewayConfig,
+  subscribeToMessages,
 } from './services/firebase';
 import { saveFonnteSession, getFonnteSession, sendFonnteMessageDirect } from './services/fonnteClient';
 
@@ -72,7 +73,21 @@ export default function App() {
       })
       .then((data) => {
         if (data && data.messages && typeof data.messages === 'object') {
-          setMessages(data.messages);
+          setMessages((prev) => {
+            const next = { ...prev };
+            Object.keys(data.messages).forEach((cId) => {
+              const currentList = prev[cId] || [];
+              const serverList = data.messages[cId] || [];
+              const map = new Map<string, WhatsAppMessage>();
+              currentList.forEach((m) => map.set(m.id, m));
+              serverList.forEach((m: any) => {
+                const existing = map.get(m.id);
+                map.set(m.id, { ...(existing || {}), ...m });
+              });
+              next[cId] = Array.from(map.values()).sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+            });
+            return next;
+          });
         }
       })
       .catch((err) => console.error('Failed to sync messages:', err));
@@ -211,6 +226,52 @@ export default function App() {
       unsubscribeGateway();
     };
   }, []);
+
+  // Real-time listener for messages in active contact conversation across all devices
+  useEffect(() => {
+    if (!activeContactId) return;
+
+    const unsubscribeMessages = subscribeToMessages(activeContactId, (firestoreMsgs) => {
+      if (Array.isArray(firestoreMsgs) && firestoreMsgs.length > 0) {
+        setMessages((prev) => {
+          const currentList = prev[activeContactId] || [];
+          const map = new Map<string, WhatsAppMessage>();
+          currentList.forEach((m) => map.set(m.id, m));
+          firestoreMsgs.forEach((fm: any) => {
+            const existing = map.get(fm.id);
+            map.set(fm.id, {
+              id: fm.id,
+              contactId: fm.contactId || activeContactId,
+              text: fm.text || '',
+              sender: fm.sender || 'customer',
+              senderName: fm.senderName || (fm.sender === 'bot' ? 'Asisten CS AI' : 'Pelanggan'),
+              timestamp: fm.timestamp || new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+              status: fm.status || 'read',
+              mediaType: fm.mediaType || 'none',
+              mediaUrl: fm.mediaUrl,
+              mediaName: fm.mediaName,
+              mediaSize: fm.mediaSize,
+              isAiGenerated: fm.isAiGenerated,
+              aiIntent: fm.aiIntent,
+              aiConfidence: fm.aiConfidence,
+              aiReasoning: fm.aiReasoning,
+              ...(existing || {}),
+              ...fm,
+            });
+          });
+          const merged = Array.from(map.values()).sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+          return {
+            ...prev,
+            [activeContactId]: merged,
+          };
+        });
+      }
+    });
+
+    return () => {
+      unsubscribeMessages();
+    };
+  }, [activeContactId]);
 
   // Modals state
   const [isPairingModalOpen, setIsPairingModalOpen] = useState<boolean>(false);
